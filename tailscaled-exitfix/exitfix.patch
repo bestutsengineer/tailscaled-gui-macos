@@ -1,0 +1,248 @@
+diff --git a/wgengine/router/osrouter/router_darwin_split.go b/wgengine/router/osrouter/router_darwin_split.go
+new file mode 100644
+index 0000000..3352639
+--- /dev/null
++++ b/wgengine/router/osrouter/router_darwin_split.go
+@@ -0,0 +1,143 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build darwin || freebsd
++
++package osrouter
++
++import (
++	"net"
++	"net/netip"
++	"runtime"
++
++	"go4.org/netipx"
++	"tailscale.com/types/logger"
++)
++
++// darwinExitFixMarker lets tools tell this build apart from upstream tailscaled.
++const darwinExitFixMarker = "tailscaled-darwin-exitfix-v2"
++
++// scopedRoute is an on-link route pinned to its interface (`route add -ifscope`).
++type scopedRoute struct {
++	prefix netip.Prefix
++	ifname string
++}
++
++// splitConflictingRoutes rewrites the routes macOS can't add with `route add -iface utunX`
++// because the OS already owns the same prefix: the default route (an exit node) and the
++// on-link prefixes of the Mac's own interfaces (an exit node with LAN access off).
++// `route add` fails with EEXIST for those, so the traffic never enters the tunnel, and the
++// matching `route delete` later removes the OS's own route instead. Each one is replaced by
++// its two halves, as other VPNs do: they win by longest-prefix match, and deleting them never
++// touches Wi-Fi's routes. tailscaled's own sockets are bound to the physical interface
++// (net/netns, IP_BOUND_IF), so its WireGuard, DERP and control traffic keeps using Wi-Fi.
++// Link-local prefixes are dropped: they can't be routed into a tunnel.
++//
++// A split on-link prefix also comes back as a scoped route on its interface. Adding the halves
++// flushes the LAN's cached neighbour routes, and a socket bound to Wi-Fi finds no LAN route of
++// its own after that, so tailscaled's WireGuard to a peer on the same LAN (often the exit node
++// itself) would fall into the tunnel. The scoped route only applies to bound sockets.
++func splitConflictingRoutes(logf logger.Logf, routes []netip.Prefix, tunname string) (out []netip.Prefix, scoped []scopedRoute) {
++	if runtime.GOOS != "darwin" {
++		return routes, nil
++	}
++	onLink := onLinkPrefixes(tunname)
++	out = make([]netip.Prefix, 0, len(routes)+4)
++	for _, p := range routes {
++		p = p.Masked()
++		ifname, isOnLink := onLink[p]
++		switch {
++		case p.Addr().IsLinkLocalUnicast():
++			continue
++		case p.Bits() == 0 || (isOnLink && p.Bits() < p.Addr().BitLen()):
++			lo, hi := halves(p)
++			logf("%s: route %v installed as %v and %v", darwinExitFixMarker, p, lo, hi)
++			out = append(out, lo, hi)
++			if isOnLink {
++				scoped = append(scoped, scopedRoute{p, ifname})
++			}
++		default:
++			out = append(out, p)
++		}
++	}
++	return out, scoped
++}
++
++// halves splits p into the two prefixes one bit longer than it.
++func halves(p netip.Prefix) (lo, hi netip.Prefix) {
++	bits := p.Bits()
++	base := p.Masked().Addr()
++	b := base.AsSlice()
++	b[bits/8] |= 0x80 >> (bits % 8)
++	hiAddr, _ := netip.AddrFromSlice(b)
++	return netip.PrefixFrom(base, bits+1), netip.PrefixFrom(hiAddr, bits+1)
++}
++
++// onLinkPrefixes maps the subnets of the Mac's up interfaces, other than the tunnel, to their interface.
++func onLinkPrefixes(tunname string) map[netip.Prefix]string {
++	m := map[netip.Prefix]string{}
++	ifaces, err := net.Interfaces()
++	if err != nil {
++		return m
++	}
++	for _, ifc := range ifaces {
++		if ifc.Name == tunname || ifc.Flags&net.FlagUp == 0 {
++			continue
++		}
++		addrs, err := ifc.Addrs()
++		if err != nil {
++			continue
++		}
++		for _, a := range addrs {
++			ipn, ok := a.(*net.IPNet)
++			if !ok {
++				continue
++			}
++			if pfx, ok := netipx.FromStdIPNet(ipn); ok {
++				m[pfx.Masked()] = ifc.Name
++			}
++		}
++	}
++	return m
++}
++
++// setScopedRoutes adds the scoped routes in want that aren't in place yet and removes the ones
++// added earlier that are no longer wanted. A route the OS already had (add fails) isn't ours,
++// so it's never deleted.
++func (r *userspaceBSDRouter) setScopedRoutes(want []scopedRoute) {
++	if runtime.GOOS != "darwin" {
++		return
++	}
++	keep := make(map[scopedRoute]bool, len(want))
++	for _, s := range want {
++		keep[s] = true
++	}
++	for s := range r.scoped {
++		if !keep[s] {
++			r.scopedRouteCmd("delete", s)
++			delete(r.scoped, s)
++		}
++	}
++	for _, s := range want {
++		if r.scoped[s] {
++			continue
++		}
++		if r.scopedRouteCmd("add", s) {
++			if r.scoped == nil {
++				r.scoped = make(map[scopedRoute]bool)
++			}
++			r.scoped[s] = true
++		}
++	}
++}
++
++func (r *userspaceBSDRouter) scopedRouteCmd(op string, s scopedRoute) bool {
++	args := []string{"route", "-q", "-n", op, "-" + inet(s.prefix), s.prefix.String(),
++		"-interface", s.ifname, "-ifscope", s.ifname}
++	out, err := cmd(args...).CombinedOutput()
++	if err != nil {
++		r.logf("%s: %v: %v\n%s", darwinExitFixMarker, args, err, out)
++		return false
++	}
++	return true
++}
+diff --git a/wgengine/router/osrouter/router_darwin_split_test.go b/wgengine/router/osrouter/router_darwin_split_test.go
+new file mode 100644
+index 0000000..744192c
+--- /dev/null
++++ b/wgengine/router/osrouter/router_darwin_split_test.go
+@@ -0,0 +1,62 @@
++// Copyright (c) Tailscale Inc & contributors
++// SPDX-License-Identifier: BSD-3-Clause
++
++//go:build darwin
++
++package osrouter
++
++import (
++	"net/netip"
++	"testing"
++)
++
++func TestHalves(t *testing.T) {
++	for _, tt := range []struct{ in, lo, hi string }{
++		{"0.0.0.0/0", "0.0.0.0/1", "128.0.0.0/1"},
++		{"::/0", "::/1", "8000::/1"},
++		{"192.168.1.0/24", "192.168.1.0/25", "192.168.1.128/25"},
++		{"10.0.0.0/8", "10.0.0.0/9", "10.128.0.0/9"},
++		{"2001:db8:1:2::/64", "2001:db8:1:2::/65", "2001:db8:1:2:8000::/65"},
++	} {
++		lo, hi := halves(netip.MustParsePrefix(tt.in))
++		if lo.String() != tt.lo || hi.String() != tt.hi {
++			t.Errorf("halves(%s) = %v, %v; want %s, %s", tt.in, lo, hi, tt.lo, tt.hi)
++		}
++	}
++}
++
++func TestSplitConflictingRoutes(t *testing.T) {
++	routes := []netip.Prefix{
++		netip.MustParsePrefix("100.64.0.0/10"),
++		netip.MustParsePrefix("0.0.0.0/0"),
++		netip.MustParsePrefix("::/0"),
++		netip.MustParsePrefix("fe80::/64"),
++	}
++	got, scoped := splitConflictingRoutes(t.Logf, routes, "utun-none")
++	want := []string{"100.64.0.0/10", "0.0.0.0/1", "128.0.0.0/1", "::/1", "8000::/1"}
++	if len(got) != len(want) {
++		t.Fatalf("got %v, want %v", got, want)
++	}
++	for i := range want {
++		if got[i].String() != want[i] {
++			t.Errorf("route %d = %v, want %s", i, got[i], want[i])
++		}
++	}
++	if len(scoped) != 0 {
++		t.Errorf("default routes produced scoped routes: %v", scoped)
++	}
++}
++
++func TestSplitOnLinkPrefixAddsScopedRoute(t *testing.T) {
++	for p, ifname := range onLinkPrefixes("utun-none") {
++		if !p.Addr().Is4() || p.Addr().IsLoopback() || p.Bits() >= 32 {
++			continue
++		}
++		got, scoped := splitConflictingRoutes(t.Logf, []netip.Prefix{p}, "utun-none")
++		if len(got) != 2 || len(scoped) != 1 || scoped[0] != (scopedRoute{p, ifname}) {
++			t.Errorf("on-link %v on %s: routes %v, scoped %v", p, ifname, got, scoped)
++		}
++		return
++	}
++	t.Skip("no IPv4 on-link prefix on this machine")
++}
+diff --git a/wgengine/router/osrouter/router_userspace_bsd.go b/wgengine/router/osrouter/router_userspace_bsd.go
+index 88eda4c..0a62d80 100644
+--- a/wgengine/router/osrouter/router_userspace_bsd.go
++++ b/wgengine/router/osrouter/router_userspace_bsd.go
+@@ -29,6 +29,7 @@ type userspaceBSDRouter struct {
+ 	tunname string
+ 	local   []netip.Prefix
+ 	routes  map[netip.Prefix]bool
++	scoped  map[scopedRoute]bool // darwin: on-link routes we pinned to their interface (router_darwin_split.go)
+ }
+ 
+ func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (*userspaceBSDRouter, error) {
+@@ -144,8 +145,9 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+ 		}
+ 	}
+ 
++	routes, scoped := splitConflictingRoutes(r.logf, cfg.Routes, r.tunname)
+ 	newRoutes := make(map[netip.Prefix]bool)
+-	for _, route := range cfg.Routes {
++	for _, route := range routes {
+ 		if runtime.GOOS != "darwin" && route == tsaddr.TailscaleULARange() {
+ 			// Because we added the interface address as a /48 above,
+ 			// the kernel already created the Tailscale ULA route
+@@ -196,6 +198,7 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+ 		r.local = append([]netip.Prefix{}, cfg.LocalAddrs...)
+ 	}
+ 	r.routes = newRoutes
++	r.setScopedRoutes(scoped)
+ 
+ 	return reterr
+ }
