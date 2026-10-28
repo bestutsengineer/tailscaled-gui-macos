@@ -20,13 +20,13 @@ cd "$WORK"
 git apply "$HERE/exitfix.patch"
 
 echo "== Testing the patch"
-go test ./wgengine/router/osrouter/ -run 'TestHalves|TestSplit'
+go test ./wgengine/router/osrouter/ -run 'TestHalves|TestSplit|TestScoped'
 
 echo "== Building tailscaled (Homebrew's ldflags)"
 eval "$(./build_dist.sh shellvars)"
 go build -trimpath -ldflags "-X tailscale.com/version.longStamp=$VERSION_LONG -X tailscale.com/version.shortStamp=$VERSION_SHORT -X tailscale.com/version.gitCommitStamp=$VERSION_GIT_HASH" \
     -o "$WORK/tailscaled" ./cmd/tailscaled
-LC_ALL=C grep -a -q tailscaled-darwin-exitfix-v2 "$WORK/tailscaled" || { echo "Patch marker missing from the build" >&2; exit 1; }
+LC_ALL=C grep -a -q tailscaled-darwin-exitfix-v3 "$WORK/tailscaled" || { echo "Patch marker missing from the build" >&2; exit 1; }
 "$WORK/tailscaled" --version | head -1
 shasum -a 256 "$WORK/tailscaled"
 

@@ -12,16 +12,26 @@
 
 ## The fix
 
-The patch adds `router_darwin_split.go` and changes one line in `Set`. On macOS, a default route, or a route equal to one of the Mac's own on-link prefixes, is installed as its two halves:
+The v3 patch adds `router_darwin_split.go` and updates route application and cleanup in `Set` and `Close`. On macOS, a default route, or a route equal to one of the Mac's own on-link prefixes, is installed as its two halves:
 
 - `0/0` becomes `0.0.0.0/1` and `128.0.0.0/1`; `::/0` becomes `::/1` and `8000::/1`.
 - `192.168.1.0/24` becomes two `/25` routes.
 
-Other VPNs do the same. The halves win by longest-prefix match, add without conflict, and deleting them never touches Wi-Fi's routes. Link-local prefixes are skipped. When a LAN prefix is split, the patch also adds an interface-scoped copy on Wi-Fi (`route add -ifscope en0`). Only sockets pinned to Wi-Fi use it, which means only tailscaled's own. That keeps WireGuard to peers on the same LAN, often the exit node itself, off the tunnel. Without it, LAN access off made a LAN exit node unreachable.
+Other VPNs do the same. The halves win by longest-prefix match, add without conflict, and deleting them never touches Wi-Fi's routes. Link-local prefixes are skipped. Before a LAN prefix is split, the patch installs an interface-scoped copy on Wi-Fi (`route add -ifscope en0`). Interface-bound sockets, including tailscaled's transport sockets, can use it. That keeps WireGuard to peers on the same LAN, often the exit node itself, off the tunnel. Without it, LAN access off made a LAN exit node unreachable.
 
 - **LAN access off:** the LAN halves go into the tunnel, so LAN traffic leaves through the exit node.
 - **LAN access on:** Tailscale doesn't send LAN prefixes at all, and Wi-Fi's `/24` beats the tunnel's `/1`, so the LAN stays local.
 - **tailscaled's own traffic:** its sockets are bound to Wi-Fi (`net/netns`, `IP_BOUND_IF`), so its WireGuard, DERP and control traffic doesn't loop into the tunnel.
+
+## v3 reliability changes
+
+- Install the physical, interface-scoped transport route before adding tunnel routes. Abort the route update if that protection fails.
+- Treat an existing direct, interface-scoped route as OS-owned and leave it alone.
+- Track only successfully added tunnel routes. Failed adds cannot make a later cleanup delete another VPN's route.
+- Retain failed scoped-route deletions for retry and clean up owned scoped routes when the router closes.
+- Unit tests cover deterministic prefix splitting, route ownership, error propagation, cleanup retries and validation of existing scoped routes.
+
+The installed daemon must contain `tailscaled-darwin-exitfix-v3`. Older v1 builds can break same-LAN exit nodes when local network access is disabled. The GUI should not treat the generic marker prefix as sufficient.
 
 ## Build and install
 
@@ -32,7 +42,7 @@ Other VPNs do the same. The halves win by longest-prefix match, add without conf
 The script:
 1. Clones the tag and commit from the Homebrew formula and checks the commit.
 2. Applies the patch and runs its tests.
-3. Builds with Homebrew's version ldflags and checks for the marker string `tailscaled-darwin-exitfix-v2`.
+3. Builds with Homebrew's version ldflags and checks for the marker string `tailscaled-darwin-exitfix-v3`.
 4. Runs `sudo tailscaled install-system-daemon` (one password prompt).
 5. Pins Homebrew's `tailscale`, so `brew upgrade` doesn't move the CLI ahead of the daemon.
 
@@ -40,7 +50,7 @@ Run it at the keyboard: the daemon restarts. Tailnet finds the marker in `/usr/l
 
 ## Trade-offs
 
-- You run a root daemon that you built: upstream source plus this 133-line patch, which you can read in `exitfix.patch`.
+- You run a root daemon that you built: upstream source plus the patch, which you can read in `exitfix.patch`.
 - Updates aren't automatic. To update: `brew unpin tailscale && brew upgrade tailscale`, then `./build.sh` again. If the patch stops applying, upstream has changed that file, so check whether they fixed it.
 - DNS isn't managed by `tailscaled` on macOS. With an exit node, public resolvers (such as `1.1.1.1`) are reached through the exit node. A resolver on your LAN is reached directly while LAN access is on.
 
@@ -55,3 +65,7 @@ brew unpin tailscale
 ```
 
 That puts back the stock Homebrew daemon. Tailnet then turns its exit-node controls off again.
+
+## Live validation
+
+The unit tests verify the routing logic without changing system routes. They cannot prove packet forwarding, DNS, same-LAN peer transport or network changes on a particular Mac. Before live tests, arm an independent timed rollback that restores the previous exit-node and LAN-access preferences. Test both LAN-access settings, verify that traffic actually exits through the selected node, then clear it and confirm the physical default route still exists. A daemon install restarts networking; keep the previous binary available for rollback.

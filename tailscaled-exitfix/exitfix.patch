@@ -1,9 +1,9 @@
 diff --git a/wgengine/router/osrouter/router_darwin_split.go b/wgengine/router/osrouter/router_darwin_split.go
 new file mode 100644
-index 0000000..3352639
+index 0000000..01bf723
 --- /dev/null
 +++ b/wgengine/router/osrouter/router_darwin_split.go
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,205 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -12,16 +12,19 @@ index 0000000..3352639
 +package osrouter
 +
 +import (
++	"errors"
++	"fmt"
 +	"net"
 +	"net/netip"
 +	"runtime"
++	"strings"
 +
 +	"go4.org/netipx"
 +	"tailscale.com/types/logger"
 +)
 +
 +// darwinExitFixMarker lets tools tell this build apart from upstream tailscaled.
-+const darwinExitFixMarker = "tailscaled-darwin-exitfix-v2"
++const darwinExitFixMarker = "tailscaled-darwin-exitfix-v3"
 +
 +// scopedRoute is an on-link route pinned to its interface (`route add -ifscope`).
 +type scopedRoute struct {
@@ -47,7 +50,10 @@ index 0000000..3352639
 +	if runtime.GOOS != "darwin" {
 +		return routes, nil
 +	}
-+	onLink := onLinkPrefixes(tunname)
++	return splitRoutesForOnLink(logf, routes, onLinkPrefixes(tunname))
++}
++
++func splitRoutesForOnLink(logf logger.Logf, routes []netip.Prefix, onLink map[netip.Prefix]string) (out []netip.Prefix, scoped []scopedRoute) {
 +	out = make([]netip.Prefix, 0, len(routes)+4)
 +	for _, p := range routes {
 +		p = p.Masked()
@@ -107,52 +113,108 @@ index 0000000..3352639
 +	return m
 +}
 +
-+// setScopedRoutes adds the scoped routes in want that aren't in place yet and removes the ones
-+// added earlier that are no longer wanted. A route the OS already had (add fails) isn't ours,
-+// so it's never deleted.
-+func (r *userspaceBSDRouter) setScopedRoutes(want []scopedRoute) {
++// addScopedRoutes preserves the daemon's physical transport before tunnel routes
++// can capture an on-link peer. Never claim ownership of a route that already exists.
++func (r *userspaceBSDRouter) addScopedRoutes(want []scopedRoute) error {
 +	if runtime.GOOS != "darwin" {
-+		return
++		return nil
 +	}
++	if r.scoped == nil {
++		r.scoped = make(map[scopedRoute]bool)
++	}
++	return addScopedRoutes(r.scoped, want, r.scopedRouteCmd, r.scopedRouteExists)
++}
++
++func addScopedRoutes(owned map[scopedRoute]bool, want []scopedRoute,
++	apply func(string, scopedRoute) error, exists func(scopedRoute) bool) error {
++	for _, s := range want {
++		if owned[s] {
++			continue
++		}
++		if err := apply("add", s); err != nil {
++			if exists(s) {
++				continue
++			}
++			return fmt.Errorf("preserve transport route %s on %s: %w", s.prefix, s.ifname, err)
++		}
++		owned[s] = true
++	}
++	return nil
++}
++
++// removeScopedRoutes keeps failed deletions in owned so a later Set/Close can retry.
++func removeScopedRoutes(owned map[scopedRoute]bool, want []scopedRoute,
++	apply func(string, scopedRoute) error) error {
 +	keep := make(map[scopedRoute]bool, len(want))
 +	for _, s := range want {
 +		keep[s] = true
 +	}
-+	for s := range r.scoped {
-+		if !keep[s] {
-+			r.scopedRouteCmd("delete", s)
-+			delete(r.scoped, s)
-+		}
-+	}
-+	for _, s := range want {
-+		if r.scoped[s] {
++	var errs []error
++	for s := range owned {
++		if keep[s] {
 +			continue
 +		}
-+		if r.scopedRouteCmd("add", s) {
-+			if r.scoped == nil {
-+				r.scoped = make(map[scopedRoute]bool)
-+			}
-+			r.scoped[s] = true
++		if err := apply("delete", s); err != nil {
++			errs = append(errs, err)
++			continue
 +		}
++		delete(owned, s)
 +	}
++	return errors.Join(errs...)
 +}
 +
-+func (r *userspaceBSDRouter) scopedRouteCmd(op string, s scopedRoute) bool {
++func (r *userspaceBSDRouter) removeScopedRoutes(want []scopedRoute) error {
++	if runtime.GOOS != "darwin" {
++		return nil
++	}
++	return removeScopedRoutes(r.scoped, want, r.scopedRouteCmd)
++}
++
++func (r *userspaceBSDRouter) scopedRouteCmd(op string, s scopedRoute) error {
 +	args := []string{"route", "-q", "-n", op, "-" + inet(s.prefix), s.prefix.String(),
 +		"-interface", s.ifname, "-ifscope", s.ifname}
 +	out, err := cmd(args...).CombinedOutput()
 +	if err != nil {
 +		r.logf("%s: %v: %v\n%s", darwinExitFixMarker, args, err, out)
-+		return false
++		return fmt.Errorf("%v: %w: %s", args, err, out)
 +	}
-+	return true
++	return nil
++}
++
++// The OS may already own the desired scope. A route lookup is accepted only if
++// it is direct, interface-scoped and bound to the requested physical interface.
++// Such a pre-existing route is used without ever deleting it.
++func (r *userspaceBSDRouter) scopedRouteExists(s scopedRoute) bool {
++	out, err := cmd("route", "-n", "get", "-"+inet(s.prefix), s.prefix.Addr().String(),
++		"-ifscope", s.ifname).CombinedOutput()
++	return err == nil && scopedRouteOutputMatches(string(out), s)
++}
++
++func scopedRouteOutputMatches(out string, s scopedRoute) bool {
++	var ifname, flags, destination string
++	for _, line := range strings.Split(out, "\n") {
++		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
++		if !ok {
++			continue
++		}
++		switch k {
++		case "interface":
++			ifname = strings.TrimSpace(v)
++		case "flags":
++			flags = strings.TrimSpace(v)
++		case "destination":
++			destination = strings.TrimSpace(v)
++		}
++	}
++	return ifname == s.ifname && destination == s.prefix.Addr().String() &&
++		strings.Contains(flags, "IFSCOPE") && !strings.Contains(flags, "GATEWAY")
 +}
 diff --git a/wgengine/router/osrouter/router_darwin_split_test.go b/wgengine/router/osrouter/router_darwin_split_test.go
 new file mode 100644
-index 0000000..744192c
+index 0000000..d9e4bc2
 --- /dev/null
 +++ b/wgengine/router/osrouter/router_darwin_split_test.go
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,122 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -161,6 +223,7 @@ index 0000000..744192c
 +package osrouter
 +
 +import (
++	"errors"
 +	"net/netip"
 +	"testing"
 +)
@@ -215,8 +278,67 @@ index 0000000..744192c
 +	}
 +	t.Skip("no IPv4 on-link prefix on this machine")
 +}
++
++func TestScopedTransportRouteOrderingAndOwnership(t *testing.T) {
++	s := scopedRoute{netip.MustParsePrefix("192.168.1.0/24"), "en0"}
++	owned := map[scopedRoute]bool{}
++	fail := errors.New("route command failed")
++	ops := []string{}
++	apply := func(op string, route scopedRoute) error { ops = append(ops, op); return nil }
++	if err := addScopedRoutes(owned, []scopedRoute{s}, apply, func(scopedRoute) bool { return false }); err != nil {
++		t.Fatal(err)
++	}
++	if !owned[s] || len(ops) != 1 || ops[0] != "add" {
++		t.Fatalf("ownership=%v ops=%v", owned, ops)
++	}
++	if err := addScopedRoutes(owned, []scopedRoute{s}, apply, func(scopedRoute) bool { return false }); err != nil {
++		t.Fatal(err)
++	}
++	if len(ops) != 1 {
++		t.Fatal("re-added owned route")
++	}
++	if err := removeScopedRoutes(owned, nil, func(string, scopedRoute) error { return fail }); !errors.Is(err, fail) || !owned[s] {
++		t.Fatalf("failed deletion lost retry state: %v %v", err, owned)
++	}
++	if err := removeScopedRoutes(owned, nil, apply); err != nil || owned[s] {
++		t.Fatalf("cleanup: %v %v", err, owned)
++	}
++	// A pre-existing OS route is usable but must never become ours to delete.
++	if err := addScopedRoutes(owned, []scopedRoute{s}, func(string, scopedRoute) error { return fail }, func(scopedRoute) bool { return true }); err != nil || owned[s] {
++		t.Fatalf("claimed OS route: %v %v", err, owned)
++	}
++	if err := addScopedRoutes(owned, []scopedRoute{s}, func(string, scopedRoute) error { return fail }, func(scopedRoute) bool { return false }); !errors.Is(err, fail) {
++		t.Fatalf("route failure not propagated: %v", err)
++	}
++}
++
++func TestSplitOnLinkDeterministic(t *testing.T) {
++	p := netip.MustParsePrefix("192.168.1.0/24")
++	got, scoped := splitRoutesForOnLink(t.Logf, []netip.Prefix{p}, map[netip.Prefix]string{p: "en0"})
++	if len(got) != 2 || got[0].String() != "192.168.1.0/25" || got[1].String() != "192.168.1.128/25" || len(scoped) != 1 || scoped[0].ifname != "en0" {
++		t.Fatalf("routes=%v scoped=%v", got, scoped)
++	}
++}
++
++func TestScopedRouteOutputMatches(t *testing.T) {
++	s := scopedRoute{netip.MustParsePrefix("192.168.1.0/24"), "en0"}
++	for _, tt := range []struct {
++		output string
++		want   bool
++	}{
++		{"destination: 192.168.1.0\ninterface: en0\nflags: <UP,DONE,STATIC,IFSCOPE>", true},
++		{"destination: 192.168.1.0\ninterface: en0\nflags: <UP,GATEWAY,IFSCOPE>", false},
++		{"destination: 192.168.1.0\ninterface: en0\nflags: <UP,DONE,STATIC>", false},
++		{"destination: 192.168.1.0\ninterface: utun7\nflags: <UP,IFSCOPE>", false},
++		{"destination: default\ninterface: en0\nflags: <UP,IFSCOPE>", false},
++	} {
++		if got := scopedRouteOutputMatches(tt.output, s); got != tt.want {
++			t.Errorf("matches(%q)=%v", tt.output, got)
++		}
++	}
++}
 diff --git a/wgengine/router/osrouter/router_userspace_bsd.go b/wgengine/router/osrouter/router_userspace_bsd.go
-index 88eda4c..0a62d80 100644
+index 88eda4c..df4961f 100644
 --- a/wgengine/router/osrouter/router_userspace_bsd.go
 +++ b/wgengine/router/osrouter/router_userspace_bsd.go
 @@ -29,6 +29,7 @@ type userspaceBSDRouter struct {
@@ -227,22 +349,74 @@ index 88eda4c..0a62d80 100644
  }
  
  func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (*userspaceBSDRouter, error) {
-@@ -144,8 +145,9 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+@@ -144,8 +145,13 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
  		}
  	}
  
 +	routes, scoped := splitConflictingRoutes(r.logf, cfg.Routes, r.tunname)
++	// Establish physical transport before tunnel halves can capture the peer.
++	if err := r.addScopedRoutes(scoped); err != nil {
++		return err
++	}
  	newRoutes := make(map[netip.Prefix]bool)
 -	for _, route := range cfg.Routes {
 +	for _, route := range routes {
  		if runtime.GOOS != "darwin" && route == tsaddr.TailscaleULARange() {
  			// Because we added the interface address as a /48 above,
  			// the kernel already created the Tailscale ULA route
-@@ -196,6 +198,7 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+@@ -154,6 +160,12 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+ 		}
+ 		newRoutes[route] = true
+ 	}
++	// Track only routes actually installed by us. A failed add must never make
++	// a later update delete another VPN's pre-existing route.
++	installedRoutes := make(map[netip.Prefix]bool, len(r.routes))
++	for route := range r.routes {
++		installedRoutes[route] = true
++	}
+ 	// Delete any preexisting routes.
+ 	for route := range r.routes {
+ 		if resetRoutes || !newRoutes[route] {
+@@ -171,12 +183,14 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+ 			if err != nil {
+ 				r.logf("route del failed: %v: %v\n%s", routedel, err, out)
+ 				setErr(err)
++			} else {
++				delete(installedRoutes, route)
+ 			}
+ 		}
+ 	}
+ 	// Add the routes.
+ 	for route := range newRoutes {
+-		if resetRoutes || !r.routes[route] {
++		if resetRoutes || !installedRoutes[route] {
+ 			net := netipx.PrefixIPNet(route)
+ 			nip := net.IP.Mask(net.Mask)
+ 			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
+@@ -185,8 +199,10 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+ 				"-iface", r.tunname}
+ 			out, err := cmd(routeadd...).CombinedOutput()
+ 			if err != nil {
+-				r.logf("addr add failed: %v: %v\n%s", routeadd, err, out)
++				r.logf("route add failed: %v: %v\n%s", routeadd, err, out)
+ 				setErr(err)
++			} else {
++				installedRoutes[route] = true
+ 			}
+ 		}
+ 	}
+@@ -195,11 +211,12 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+ 	if reterr == nil {
  		r.local = append([]netip.Prefix{}, cfg.LocalAddrs...)
  	}
- 	r.routes = newRoutes
-+	r.setScopedRoutes(scoped)
+-	r.routes = newRoutes
++	r.routes = installedRoutes
++	setErr(r.removeScopedRoutes(scoped))
  
  	return reterr
+ }
+ 
+ func (r *userspaceBSDRouter) Close() error {
+-	return nil
++	return r.removeScopedRoutes(nil)
  }
