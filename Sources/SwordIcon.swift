@@ -1,39 +1,39 @@
 import AppKit
 
-/// The pixel sword drawn in the menu bar (and, via tools/MakeIcon.swift, in the app icon).
-/// Solid while connected, empty (outline) while not; a dot means an exit node carries traffic,
-/// a "!" means something needs a look.
+/// Three monochrome silhouettes, readable at the menu bar's native 18-point size.
+/// The blade is filled when connected and outlined when disconnected. An outward
+/// arrow marks a connected exit node. Errors belong in the tooltip and menu.
 enum SwordIcon: String {
-    case solid, empty, exitNode, warning
+    case solid, empty, exitNode
 
     /// 18 × 18 cells. X: drawn in every variant. #: the blade's fill, solid variants only.
     static let map = [
-        "...............XXX",
-        "..............X##X",
-        ".............X###X",
-        "............X###X.",
-        "...........X###X..",
-        "..........X###X...",
-        ".........X###X....",
-        "....XX..X###X.....",
-        ".....XXX###X......",
-        "......XXX#X.......",
+        "..................",
+        "...............XX.",
+        "..............X#X.",
+        ".............X##X.",
+        "............X##X..",
+        "...........X##X...",
+        "..........X##X....",
+        "....XX...X##X.....",
+        ".....XX.X##X......",
+        "......XX##X.......",
         ".......XXX........",
-        ".....XX.XX........",
-        "....XX...XX.......",
-        "...XX.....X.......",
-        "...X..............",
-        ".XX...............",
-        ".XX...............",
+        "......XX.XX.......",
+        ".....XX...XX......",
+        "....XX............",
+        "...XX.............",
+        "..XXX.............",
+        "..XX..............",
         "..................",
     ]
     static let size = 18
 
-    /// Extra cells in the empty top-left corner: a dot for an exit node, a "!" for a warning.
+    /// An outward arrow occupies the blade's negative space. Unlike a
+    /// dot, its silhouette still communicates routing at small sizes.
     private var badge: [(Int, Int)] {
         switch self {
-        case .exitNode: return [(1, 1), (2, 1), (1, 2), (2, 2)]
-        case .warning: return [(1, 0), (2, 0), (1, 1), (2, 1), (1, 2), (2, 2), (1, 3), (2, 3), (1, 5), (2, 5)]
+        case .exitNode: return [(2, 2), (3, 2), (4, 2), (4, 3), (4, 4), (3, 3), (2, 4), (1, 5)]
         case .solid, .empty: return []
         }
     }
@@ -69,7 +69,11 @@ enum SwordIcon: String {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "Tailnet"
+        switch self {
+        case .solid: image.accessibilityDescription = "Tailnet connected"
+        case .empty: image.accessibilityDescription = "Tailnet disconnected"
+        case .exitNode: image.accessibilityDescription = "Tailnet connected through an exit node"
+        }
         return image
     }
 }
