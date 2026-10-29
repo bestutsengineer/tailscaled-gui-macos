@@ -17,14 +17,25 @@ enum SwordIcon: String {
         "..X...X#X...",
         "..XX.X#X....",
         "...XX#X.....",
-        "....XXX.....",
-        "...XX.XX....",
-        "..XX...X....",
-        ".XX.........",
+        "....XX......",
+        "...X.XX.....",
+        "..X...XX....",
+        "XX..........",
         "XX..........",
     ]
     static let size = 12
     static let menuPoints = 18
+
+    /// The blade, guard, grip and pommel reflect exactly across x + y = 11.
+    /// Keeping outline and fill symmetric separately preserves both base states.
+    static var hasSymmetricBase: Bool {
+        guard map.count == size, map.allSatisfy({ $0.count == size }) else { return false }
+        let grid = map.map(Array.init)
+        for y in 0..<size {
+            for x in 0..<size where grid[y][x] != grid[size - 1 - x][size - 1 - y] { return false }
+        }
+        return true
+    }
 
     /// An outward arrow occupies the blade's negative space. Unlike a
     /// dot, its silhouette still communicates routing at small sizes.

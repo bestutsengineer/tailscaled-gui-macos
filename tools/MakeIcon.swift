@@ -59,6 +59,7 @@ enum MakeIcon {
     }
 
     static func main() throws {
+        precondition(SwordIcon.hasSymmetricBase, "Sword outline and fill must mirror across the blade axis")
         if CommandLine.arguments.dropFirst().first == "--preview" {
             let path = CommandLine.arguments.dropFirst(2).first ?? "Resources/SwordPreview.png"
             try preview().write(to: URL(fileURLWithPath: path))
