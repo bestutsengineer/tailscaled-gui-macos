@@ -1,20 +1,56 @@
-# Build output
+# Generated builds and development caches
 build/
-*.iconset/
-
-# macOS and editor clutter
-.DS_Store
-.AppleDouble
-xcuserdata/
-*.xcuserstate
-.swiftpm/
 .build/
-.vscode/
-.idea/
-
-# Never commit secrets or local config
+.swiftpm/
+DerivedData/
+*.app/
+*.dSYM/
+*.pcm
+*.o
+*.a
+*.dylib
+*.iconset/
+# Local credentials and environment (the example is safe to track)
 .env
 .env.*
+!.env.example
 *.pem
-*.p12
 *.key
+*.p12
+*.pfx
+*.mobileprovision
+credentials*
+secrets*
+*.tfstate
+*.tfstate.*
+.terraform/
+.aws/
+.ssh/
+.kube/
+# Private diagnostics, sessions and backups
+*.log
+*.log.*
+*.pcap
+*.pcapng
+*.dump
+*.sql
+*.bak
+*.backup
+*.sqlite
+*.sqlite3
+.ipynb_checkpoints/
+UPDATE-NOTES.md
+SLEEP-DIAGNOSIS.md
+LIVE-VALIDATION.json
+AGENTS.md
+CLAUDE.md
+.agents/
+.claude/
+.codex/
+# Desktop and editor state
+.DS_Store
+.AppleDouble
+.vscode/
+.idea/
+xcuserdata/
+*.xcuserstate

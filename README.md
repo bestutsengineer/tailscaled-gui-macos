@@ -128,3 +128,9 @@ A gitleaks pre-commit hook scans staged changes for secrets and refuses author e
 ## License
 
 MIT, see [LICENSE](LICENSE). `tailscaled-exitfix/exitfix.patch` modifies Tailscale and is under Tailscale's BSD-3-Clause licence ([tailscaled-exitfix/LICENSE](tailscaled-exitfix/LICENSE)).
+
+## Contributor checks
+
+Install scanners with `brew install gitleaks trufflehog` and enable the staged hook with `git config core.hooksPath .githooks`. The `.env.example` file is documentation only; no credentials or dotenv runtime configuration are required. Use a GitHub no-reply address or an intentional project identity for public commits.
+
+Before publishing, scan both the source tree and every Git ref; the staged hook alone does not cover old commits. Do not ship `build/`, diagnostics, session notes, machine-specific configuration or Git history containing private data. This snapshot includes no CI workflow and does not grant Actions permissions.
