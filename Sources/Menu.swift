@@ -50,10 +50,9 @@ enum MenuModel {
         }
     }
 
-    /// Menu bar icon: solid sword while connected (with a dot when an exit node carries traffic),
-    /// empty sword while not, "!" when something needs a look.
+    /// Menu bar icon: solid sword while connected (with an outward arrow when an exit node carries traffic),
+    /// empty sword while not; errors stay in the menu and tooltip.
     static func icon(_ s: TailnetState) -> SwordIcon {
-        if s.exitNodeUnreachable || s.needsLogin || (s.error != nil && !s.running) { return .warning }
         if !s.running { return .empty }
         return s.usingExitNode ? .exitNode : .solid
     }
@@ -107,7 +106,7 @@ enum MenuModel {
         let works = s.exitFix
         var rows: [MenuRow] = []
         if !works {
-            rows.append(MenuRow(title: "Needs the patched tailscaled (tailscaled-exitfix)", kind: .warning,
+            rows.append(MenuRow(title: "Exit-node repair required (exitfix v3)", kind: .warning,
                                 symbol: "exclamationmark.triangle",
                                 tooltip: "Stock tailscaled on macOS doesn't route exit-node traffic, and clearing an exit node drops the network for a minute."))
             rows.append(.separator)

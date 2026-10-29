@@ -7,6 +7,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var state = TailnetState()
     private var currentIcon = ""
     private var busy = false
+    private var refreshing = false
     private let work = DispatchQueue(label: "tailnet.work")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -26,9 +27,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Reads tailscaled off the main thread, then updates the icon.
     @objc private func refresh() {
+        guard !refreshing && !busy else { return }
+        refreshing = true
         work.async {
             let fresh = Tailscale.read()
             DispatchQueue.main.async {
+                self.refreshing = false
                 self.state = fresh
                 self.updateIcon()
             }
@@ -46,9 +50,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        // A fresh read so the checkmarks match tailscaled right now (capped at a few seconds).
-        state = Tailscale.read()
-        updateIcon()
+        // Render immediately; CLI reads stay on the worker queue.
+        refresh()
         menu.removeAllItems()
         MenuModel.rows(state, loginItem: LoginItem.isEnabled).map(makeItem).forEach(menu.addItem)
     }
@@ -95,7 +98,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Actions
 
     @objc private func menuAction(_ sender: NSMenuItem) {
-        guard let command = (sender.representedObject as? CommandBox)?.command else { return }
+        guard !busy, let command = (sender.representedObject as? CommandBox)?.command else { return }
         switch command {
         case .copyIP:
             guard let ip = state.selfIP else { return }

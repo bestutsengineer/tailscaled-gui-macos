@@ -9,8 +9,8 @@ enum CLI {
           (no command)            run the menu bar app
           --status                connection, exit node and LAN access
           --menu                  print the menu as text
-          --exit-node NAME|IP     use that exit node (needs tailscaled-exitfix, or --force)
-          --exit-node none        stop using an exit node (can drop the default route briefly)
+          --exit-node NAME|IP     use that exit node (needs tailscaled-exitfix)
+          --exit-node none        stop using an exit node
           --lan on|off            allow local network access while using an exit node
           --connect | --disconnect
           --login-item on|off     start Tailnet at login (LaunchAgent)
@@ -18,6 +18,9 @@ enum CLI {
 
     static func run(_ args: [String]) -> Int32 {
         switch args.first {
+        case "--rollback-worker":
+            guard args.count == 2 else { return 2 }
+            return ExitChange.worker(token: args[1])
         case "--status":
             let s = Tailscale.read()
             print(MenuModel.headline(s))
@@ -28,17 +31,17 @@ enum CLI {
             print("LAN access: \(s.allowLAN ? "allowed" : "blocked") while using an exit node")
             print("offered by: \(s.exitNodes.map { "\($0.name)\($0.online ? "" : " (offline)")" }.joined(separator: ", "))")
             print("operator:   \(s.operatorUser ?? "none (changes need sudo)")")
-            print("exit fix:   \(s.exitFix ? "installed" : "not installed (stock tailscaled)")")
+            print("exit fix:   \(s.exitFix ? "v3 installed" : "repair required (stock or older patch)")")
             if let error = s.error { print("error:      \(error)") }
-            return 0
+            return s.error == nil ? 0 : 1
         case "--menu":
             MenuModel.rows(Tailscale.read(), loginItem: LoginItem.isEnabled).flatMap(\.flatTitles).forEach { print($0) }
             return 0
         case "--exit-node":
             guard args.count >= 2 else { return fail(usage) }
             if args[1] == "none" { return report(Tailscale.setExitNode(nil)) }
-            guard Tailscale.daemonHasExitFix() || args.dropFirst(2).contains("--force") else {
-                return fail("Stock tailscaled on macOS can't use exit nodes; install tailscaled-exitfix (see README) or add --force.")
+            guard Tailscale.daemonHasExitFix() else {
+                return fail("Stock tailscaled on macOS can't use exit nodes; install tailscaled-exitfix v3 (see README).")
             }
             let wanted = args[1].lowercased()
             let nodes = Tailscale.read().exitNodes
@@ -64,6 +67,7 @@ enum CLI {
 
     private static func report(_ r: ShellResult) -> Int32 {
         if !r.ok { fputs(r.stderr.isEmpty ? r.stdout : r.stderr, stderr) }
+        else if !r.stdout.isEmpty { print(r.stdout, terminator: "") }
         return r.ok ? 0 : 1
     }
 

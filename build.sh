@@ -7,7 +7,7 @@ APP=build/Tailnet.app
 rm -rf build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-swiftc -O -swift-version 5 -target "$(uname -m)-apple-macos14.0" \
+swiftc -module-cache-path build/module-cache -O -swift-version 5 -target "$(uname -m)-apple-macos14.0" \
     -framework AppKit \
     Sources/*.swift -o "$APP/Contents/MacOS/Tailnet"
 

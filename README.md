@@ -8,14 +8,13 @@ Tailscale's App Store and Standalone apps only connect after someone logs in. Ru
 
 ## Menu
 
-The menu bar shows a pixel sword:
+The menu bar shows a chunky pixel sword, with a 12×12 grid rendered at 18 points. Explicit 1×/2× images align each block to three physical pixels on Retina displays. Errors appear in the tooltip and menu; the icon has exactly three states:
 
 | Icon | Meaning |
 |---|---|
 | Solid sword | Connected |
-| Solid sword, dot top-left | Connected, and an exit node carries your traffic |
+| Solid sword, outward arrow | Connected through an exit node |
 | Empty sword | Disconnected |
-| Empty sword, "!" top-left | Needs a look: signed out, exit node offline, or `tailscaled` not reachable |
 
 The menu has:
 - Status, plus this Mac's name and Tailscale IP (click to copy).
@@ -69,17 +68,31 @@ Stock `tailscaled` (checked on 1.104.1) can't use an exit node on macOS:
 - Clearing the exit node runs `route delete -inet 0.0.0.0/0 -iface utunX`, which removes the Mac's real default route until macOS restores it (about a minute in testing).
 - Allow Local Network Access has no effect.
 
-[`tailscaled-exitfix/`](tailscaled-exitfix/README.md) holds a small patch that fixes this by installing split routes (`0.0.0.0/1` and `128.0.0.0/1`), plus a script that builds and installs it. Tailnet looks for the patch's marker in `/usr/local/bin/tailscaled`:
+[`tailscaled-exitfix/`](tailscaled-exitfix/README.md) holds a small patch that fixes this by installing split routes (`0.0.0.0/1` and `128.0.0.0/1`), plus a script that builds and installs it. Tailnet requires the v3 patch marker in `/usr/local/bin/tailscaled`:
 
 - **Patched:** the exit-node controls work.
-- **Stock:** the menu lists exit nodes but won't switch them. **None** stays clickable if one is set, so you can clear it.
+- **Stock or an older patch:** the menu lists exit nodes but won't switch them. **None** stays clickable if one is set, so you can clear it.
+
+## Safe routing changes
+
+Before selecting an exit node, changing LAN access or reconnecting with a saved exit node, Tailnet starts an independent launchd rollback worker. It must acknowledge its recovery file before any settings change. The worker restores the previous exit node, LAN preference and stopped state after 60 seconds unless validation commits the change. It survives quitting or crashing the GUI and does not need internet access.
+
+Validation requires the same direct HTTPS/DNS probes that worked before the change, the requested preferences, an online selected peer, and tunnel routes for both halves of the IPv4 internet. A failure triggers immediate restoration; the watchdog retries if that fails. This avoids treating Wi-Fi fallback as a working exit node. Clear remains available when internet is already down. If a deleted peer cannot be resolved, emergency clear falls back to no exit node rather than trying to restore an unusable selection.
+
+HTTPS checks contact Apple and Cloudflare directly, bypassing proxy environment settings. Networks blocking both checks prevent a new exit-node selection. Normal Tailscale operation still fails closed if an established exit node later goes offline; Tailnet does not silently disable it.
+
+A retained `~/Library/Application Support/Tailnet/exit-change/recovery.json` means every recovery attempt failed. Inspect it and restore the saved preferences with the `tailscale` CLI before removing the directory. Removing it during an active change disables recovery. Changes made in another client during the 60-second window may be overwritten by rollback.
+
+Run `Tests/run.sh` for deterministic rollback/route-validation tests using mocked commands and an isolated temporary directory. Live routing tests require the system daemon installation and are separate from these tests.
+
+Menu opening renders cached state immediately and refreshes in the background; it no longer blocks on two CLI calls.
 
 ## Command line
 
 ```
 Tailnet --status | --menu
 Tailnet --connect | --disconnect
-Tailnet --exit-node NAME|IP | --exit-node none     # NAME needs the patched daemon, or add --force
+Tailnet --exit-node NAME|IP | --exit-node none     # NAME needs the v3 patched daemon
 Tailnet --lan on|off
 Tailnet --login-item on|off
 ```

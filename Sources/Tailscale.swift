@@ -19,6 +19,7 @@ struct TailnetState: Equatable {
     var tailnet: String?
     var exitNodes: [ExitNode] = []
     var exitNodeID = ""                 // from prefs; set even while that node is offline or we're stopped
+    var exitNodeIP = ""
     var allowLAN = false
     var operatorUser: String?
     var exitFix = false                 // installed tailscaled has tailscaled-exitfix (see Tailscale.exitFixMarker)
@@ -28,7 +29,7 @@ struct TailnetState: Equatable {
     var running: Bool { backendState == "Running" }
     var needsLogin: Bool { backendState == "NeedsLogin" }
     var activeExitNode: ExitNode? { exitNodes.first(where: \.selected) }
-    var usingExitNode: Bool { !exitNodeID.isEmpty }
+    var usingExitNode: Bool { !exitNodeID.isEmpty || !exitNodeIP.isEmpty }
     /// Tailscale fails closed: with the chosen exit node offline, internet traffic is dropped.
     var exitNodeUnreachable: Bool { running && usingExitNode && activeExitNode?.online != true }
 }
@@ -46,7 +47,7 @@ enum Tailscale {
     /// `0.0.0.0/0 -iface utunX`, which macOS refuses while Wi-Fi's default route exists, and clearing
     /// the exit node then deletes Wi-Fi's default route. tailscaled-exitfix/exitfix.patch fixes that;
     /// a daemon built with it carries this marker, and only then does the menu change exit nodes.
-    static let exitFixMarker = "tailscaled-darwin-exitfix-v"    // any version of the patch
+    static let exitFixMarker = "tailscaled-darwin-exitfix-v3"   // v1 loses transport; v2 has incomplete error handling
     private static let markerLock = NSLock()
     private static var markerCache: (mtime: Date, found: Bool)?
 
@@ -74,12 +75,19 @@ enum Tailscale {
         let prefs = Shell.run(cli, ["debug", "prefs"], timeout: 4)
         if prefs.ok, let json = object(prefs.stdout) {
             state.exitNodeID = json["ExitNodeID"] as? String ?? ""
+            let pendingIP = json["ExitNodeIP"] as? String ?? ""
+            state.exitNodeIP = ["", "invalid IP"].contains(pendingIP) ? "" : pendingIP
             state.allowLAN = json["ExitNodeAllowLANAccess"] as? Bool ?? false
             state.operatorUser = (json["OperatorUser"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         }
 
+        else {
+            state.error = firstLine(prefs.stderr) ?? "Could not read Tailscale preferences"
+            return state
+        }
+
         let status = Shell.run(cli, ["status", "--json"], timeout: 4)
-        guard let json = object(status.stdout) else {
+        guard status.ok, let json = object(status.stdout), json["BackendState"] is String else {
             state.error = firstLine(status.stderr) ?? "tailscale status failed (is tailscaled running?)"
             return state
         }
@@ -102,7 +110,7 @@ enum Tailscale {
                             ip: ip,
                             os: peer["OS"] as? String ?? "",
                             online: peer["Online"] as? Bool ?? false,
-                            selected: peer["ExitNode"] as? Bool == true || (!id.isEmpty && id == state.exitNodeID))
+                            selected: peer["ExitNode"] as? Bool == true || (!id.isEmpty && id == state.exitNodeID) || ip == state.exitNodeIP)
         }
         .sorted { ($0.online ? 0 : 1, $0.name.lowercased()) < ($1.online ? 0 : 1, $1.name.lowercased()) }
         return state
@@ -111,15 +119,20 @@ enum Tailscale {
     // MARK: Changes (need root or the operator user; see README)
 
     static func setExitNode(_ node: ExitNode?) -> ShellResult {
-        Shell.run(cli, ["set", "--exit-node=\(node?.ip ?? "")"], timeout: 15)
+        ExitChange.perform(node: node?.ip ?? "")
     }
 
     static func setAllowLAN(_ allow: Bool) -> ShellResult {
-        Shell.run(cli, ["set", "--exit-node-allow-lan-access=\(allow)"], timeout: 15)
+        ExitChange.perform(allowLAN: allow)
     }
 
     /// `tailscale up` with no flags only flips WantRunning back on; prefs set with `tailscale set` stay.
-    static func connect() -> ShellResult { Shell.run(cli, ["up"], timeout: 20) }
+    static func connect() -> ShellResult {
+        let state = read()
+        guard state.error == nil else { return ExitChange.failure(state.error ?? "Cannot read preferences") }
+        if state.usingExitNode { return ExitChange.perform(connect: true) }
+        return Shell.run(cli, ["up"], timeout: 20)
+    }
 
     static func disconnect() -> ShellResult { Shell.run(cli, ["down"], timeout: 15) }
 

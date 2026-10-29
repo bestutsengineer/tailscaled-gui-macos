@@ -20,7 +20,13 @@ enum Shell {
         do { try process.run() } catch {
             return ShellResult(status: -1, stdout: "", stderr: error.localizedDescription)
         }
-        let killer = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        let killer = DispatchWorkItem {
+            guard process.isRunning else { return }
+            process.terminate()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            }
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
 
         // Drain stderr concurrently so a chatty child can't fill one pipe while we block on the other.
