@@ -158,6 +158,6 @@ Exitfix v4 preserves physical interface-scoped default routes before installing 
 
 ## Release and privacy
 
-This repository contains rewritten project history with private operational notes removed and neutral contributor metadata. Review authorship and local diagnostics before publishing. The environment examples are placeholders; Tailnet does not read dotenv files. The exit-node patch includes upstream BSD-3-Clause material; retain its license and follow `NOTICE.md` if distributing a daemon binary.
+This repository contains rewritten project history with private operational notes removed and GitHub no-reply contributor metadata. Review authorship and local diagnostics before publishing. The environment examples are placeholders; Tailnet does not read dotenv files. The exit-node patch includes upstream BSD-3-Clause material; retain its license and follow `NOTICE.md` if distributing a daemon binary.
 
 The exitfix installer can restart a root system daemon and interrupt network access. Review its script first and use `tailscaled-exitfix/build.sh --no-install` to build without installing. Keep a local recovery route.
