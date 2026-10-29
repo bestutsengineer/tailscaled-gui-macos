@@ -2,7 +2,7 @@
 
 <img src="Resources/readme/app.png" alt="tailscaled-gui app icon" width="96">
 
-A small macOS menu bar app for the open-source Tailscale daemon. Connect, choose an exit node, and get help setting up unattended remote access.
+Control Tailscale and set up your MacBook for unattended remote access, even with the lid closed and after restarts.
 
 **Tested with:** Tailscale / `tailscaled` **1.104.1**, with the included **exitfix v4** patch, on **macOS 26.2 on Apple silicon**. Other versions and platforms have not been verified. Exit-node switching requires the patched daemon.
 
@@ -17,7 +17,7 @@ Use **Unattended Remote Access Guide…** in the menu to check your setup and wa
 
 After a normal restart, **FileVault may require someone at the Mac to unlock the disk** before remote services can start. Turning FileVault off can remove that step, but makes files easier to access if the Mac is lost or stolen. The guide explains the choice; it does not change FileVault or install other apps for you.
 
-Keep the Mac powered, awake and online, then test from another device after a restart **before relying on unattended access**. The guide's checks cannot guarantee that a remote connection will work.
+Closed-lid access depends on a suitable power, display or sleep-prevention setup. Keep the Mac powered, awake and online, then test from another device with the lid closed and after a restart **before relying on unattended access**. The guide's checks cannot guarantee that a remote connection will work.
 
 ## What the icons mean
 
