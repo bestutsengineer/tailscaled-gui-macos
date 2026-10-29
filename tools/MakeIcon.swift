@@ -26,7 +26,7 @@ enum MakeIcon {
     }
 
     static func preview() -> Data {
-        let width = 900, height = 460
+        let width = 900, height = 520
         let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
                                    samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                                    bytesPerRow: 0, bitsPerPixel: 0)!
@@ -34,18 +34,24 @@ enum MakeIcon {
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         let states: [(SwordIcon, String)] = [(.empty, "Disconnected"), (.solid, "Connected"), (.exitNode, "Connected + exit node")]
         for (row, dark) in [false, true].enumerated() {
-            let y = CGFloat(row * 230)
+            let y = CGFloat(row * 260)
             let background = dark ? NSColor(calibratedWhite: 0.10, alpha: 1) : NSColor(calibratedWhite: 0.96, alpha: 1)
             let foreground = dark ? NSColor.white : NSColor(calibratedWhite: 0.12, alpha: 1)
             background.setFill()
-            NSRect(x: 0, y: y, width: CGFloat(width), height: 230).fill()
+            NSRect(x: 0, y: y, width: CGFloat(width), height: 260).fill()
             for (column, state) in states.enumerated() {
                 let x = CGFloat(column * 300)
-                state.0.draw(in: NSRect(x: x + 105, y: y + 106, width: 90, height: 90), color: foreground)
-                state.0.draw(in: NSRect(x: x + 141, y: y + 69, width: 18, height: 18), color: foreground)
+                state.0.draw(in: NSRect(x: x + 102, y: y + 132, width: 96, height: 96), color: foreground)
+                state.0.draw(in: NSRect(x: x + 101, y: y + 82, width: 18, height: 18), color: foreground)
+                state.0.draw(in: NSRect(x: x + 174, y: y + 73, width: 36, height: 36), color: foreground)
+                let captionAttrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: foreground.withAlphaComponent(0.65)]
+                ("1× · 18px" as NSString).draw(at: NSPoint(x: x + 86, y: y + 53), withAttributes: captionAttrs)
+                ("Retina 2× · 36px" as NSString).draw(at: NSPoint(x: x + 154, y: y + 53), withAttributes: captionAttrs)
+                let representations = state.0.menuBarImage.representations
+                precondition(representations.map(\.pixelsWide).sorted() == [18, 36], "Both menu-bar scales must exist")
                 let label = state.1 as NSString
                 let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 15, weight: .medium), .foregroundColor: foreground]
-                label.draw(at: NSPoint(x: x + (300 - label.size(withAttributes: attrs).width) / 2, y: y + 31), withAttributes: attrs)
+                label.draw(at: NSPoint(x: x + (300 - label.size(withAttributes: attrs).width) / 2, y: y + 21), withAttributes: attrs)
             }
         }
         NSGraphicsContext.restoreGraphicsState()

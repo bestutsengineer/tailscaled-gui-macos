@@ -6,34 +6,31 @@ import AppKit
 enum SwordIcon: String {
     case solid, empty, exitNode
 
-    /// 18 × 18 cells. X: drawn in every variant. #: the blade's fill, solid variants only.
+    /// A deliberately chunky 12 × 12 grid inside an 18-point icon. Each cell is
+    /// 1.5 points: exactly three physical pixels on a 2× Retina display.
+    /// X: drawn in every variant. #: the blade's fill, solid variants only.
     static let map = [
-        "..................",
-        "...............XX.",
-        "..............X#X.",
-        ".............X##X.",
-        "............X##X..",
-        "...........X##X...",
-        "..........X##X....",
-        "....XX...X##X.....",
-        ".....XX.X##X......",
-        "......XX##X.......",
-        ".......XXX........",
-        "......XX.XX.......",
-        ".....XX...XX......",
-        "....XX............",
-        "...XX.............",
-        "..XXX.............",
-        "..XX..............",
-        "..................",
+        "..........XX",
+        ".........X#X",
+        "........X#X.",
+        ".......X#X..",
+        "..X...X#X...",
+        "..XX.X#X....",
+        "...XX#X.....",
+        "....XXX.....",
+        "...XX.XX....",
+        "..XX...X....",
+        ".XX.........",
+        "XX..........",
     ]
-    static let size = 18
+    static let size = 12
+    static let menuPoints = 18
 
     /// An outward arrow occupies the blade's negative space. Unlike a
     /// dot, its silhouette still communicates routing at small sizes.
     private var badge: [(Int, Int)] {
         switch self {
-        case .exitNode: return [(2, 2), (3, 2), (4, 2), (4, 3), (4, 4), (3, 3), (2, 4), (1, 5)]
+        case .exitNode: return [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (1, 1), (0, 2)]
         case .solid, .empty: return []
         }
     }
@@ -61,12 +58,25 @@ enum SwordIcon: String {
         }
     }
 
-    /// An 18-point template image for the status item; macOS tints it for light and dark menu bars.
+    /// Explicit 1× and 2× bitmaps prevent AppKit from resampling the pixel grid
+    /// at Retina scale. At 1× the half-pixel edges use normal antialiasing; at 2×
+    /// every cell lands on a whole 3 × 3 block of physical pixels.
     var menuBarImage: NSImage {
-        let side = CGFloat(Self.size)
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            self.draw(in: rect, color: .black)
-            return true
+        let points = NSSize(width: Self.menuPoints, height: Self.menuPoints)
+        let image = NSImage(size: points)
+        for scale in [1, 2] {
+            let pixels = Self.menuPoints * scale
+            guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
+                                            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                            isPlanar: false, colorSpaceName: .deviceRGB,
+                                            bytesPerRow: 0, bitsPerPixel: 0) else { continue }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            NSGraphicsContext.current?.shouldAntialias = true
+            self.draw(in: NSRect(x: 0, y: 0, width: pixels, height: pixels), color: .black)
+            NSGraphicsContext.restoreGraphicsState()
+            rep.size = points
+            image.addRepresentation(rep)
         }
         image.isTemplate = true
         switch self {
