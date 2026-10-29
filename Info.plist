@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>local.tailnet</string>
+	<string>local.tailscaled-gui</string>
 	<key>CFBundleName</key>
-	<string>Tailnet</string>
+	<string>tailscaled-gui</string>
 	<key>CFBundleDisplayName</key>
-	<string>Tailnet</string>
+	<string>tailscaled-gui</string>
 	<key>CFBundleExecutable</key>
-	<string>Tailnet</string>
+	<string>tailscaled-gui</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

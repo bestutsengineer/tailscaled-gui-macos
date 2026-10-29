@@ -11,8 +11,8 @@ enum Shell {
         ShellResult(status: 1, stdout: "", stderr: "unavailable")
     }
 }
-struct TailnetState { var running = false; var error: String? = "unavailable" }
-enum Tailscale { static func read() -> TailnetState { TailnetState() } }
+struct TailscaleState { var running = false; var error: String? = "unavailable" }
+enum Tailscale { static func read() -> TailscaleState { TailscaleState() } }
 
 func result(_ text: String, _ status: Int32 = 0) -> GuideCheck {
     RemoteAccessChecks.fileVault(ShellResult(status: status, stdout: text, stderr: ""))

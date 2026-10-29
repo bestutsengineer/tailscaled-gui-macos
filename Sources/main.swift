@@ -6,7 +6,7 @@ if let first = arguments.first, first.hasPrefix("--") || first == "-h" {
 }
 
 // One instance at a time.
-let bundleID = Bundle.main.bundleIdentifier ?? "local.tailnet"
+let bundleID = Bundle.main.bundleIdentifier ?? "local.tailscaled-gui"
 if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).contains(where: { $0.processIdentifier != getpid() }) {
     exit(0)
 }

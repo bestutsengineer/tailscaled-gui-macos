@@ -31,21 +31,26 @@ enum ExitNodeHistory {
         var ip: String
         var name: String
 
-        func resolve(in state: TailnetState) -> ExitNode? {
+        func resolve(in state: TailscaleState) -> ExitNode? {
             state.exitNodes.first { id.isEmpty ? $0.ip == ip : $0.id == id }
         }
     }
     #if CONNECTION_TESTS
-    static let file = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TAILNET_TEST_DIRECTORY"]!)
+    static let file = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TAILSCALED_GUI_TEST_DIRECTORY"]!)
         .appendingPathComponent("last-exit-node.json")
+    static let legacyFile = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TAILSCALED_GUI_TEST_DIRECTORY"]!)
+        .appendingPathComponent("legacy-last-exit-node.json")
     #else
     static let file = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent("Library/Application Support/tailscaled-gui/last-exit-node.json")
+    static let legacyFile = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Library/Application Support/Tailnet/last-exit-node.json")
     #endif
 
     static func load() throws -> Saved? {
-        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
-        return try JSONDecoder().decode(Saved.self, from: Data(contentsOf: file))
+        let path = FileManager.default.fileExists(atPath: file.path) ? file : legacyFile
+        guard FileManager.default.fileExists(atPath: path.path) else { return nil }
+        return try JSONDecoder().decode(Saved.self, from: Data(contentsOf: path))
     }
 
     static func save(_ node: ExitNode) throws {
@@ -59,7 +64,7 @@ enum ExitNodeHistory {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
 
-    static func rememberSelection(_ state: TailnetState) throws {
+    static func rememberSelection(_ state: TailscaleState) throws {
         if let node = state.activeExitNode { try save(node) }
         else if state.usingExitNode {
             try save(Saved(id: state.exitNodeID, ip: state.exitNodeIP, name: state.exitNodeIP.isEmpty ? state.exitNodeID : state.exitNodeIP))

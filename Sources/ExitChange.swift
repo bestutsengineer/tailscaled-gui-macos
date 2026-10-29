@@ -11,7 +11,7 @@ enum ExitChange {
         var token: String
     }
     #if EXIT_CHANGE_TESTS
-    static let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TAILNET_TEST_DIRECTORY"]!)
+    static let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TAILSCALED_GUI_TEST_DIRECTORY"]!)
     #else
     static let directory = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent("Library/Application Support/Tailnet/exit-change", isDirectory: true)
@@ -65,7 +65,7 @@ enum ExitChange {
         guard let executable = Bundle.main.executablePath else {
             try? fm.removeItem(at: directory); return failed("Can't locate the rollback worker.")
         }
-        let label = "local.tailnet.rollback." + recovery.token
+        let label = "local.tailscaled-gui.rollback." + recovery.token
         let armed = Shell.run("/bin/launchctl", ["submit", "-l", label, "--", executable, "--rollback-worker", recovery.token])
         guard armed.ok else { try? fm.removeItem(at: directory); return failed("Couldn't arm rollback: " + armed.stderr) }
         // Wait for the independent worker to acknowledge that it has loaded the recovery data.
@@ -134,10 +134,10 @@ enum ExitChange {
     static func acknowledge(_ recovery: Recovery) throws {
         try Data(recovery.token.utf8).write(to: directory.appendingPathComponent("committed"), options: .atomic)
     }
-    static func matches(_ state: TailnetState, node: String?, lan: Bool?, connect: Bool) -> Bool {
+    static func matches(_ state: TailscaleState, node: String?, lan: Bool?, connect: Bool) -> Bool {
         validationFailure(state, node: node, lan: lan, connect: connect) == nil
     }
-    static func validationFailure(_ state: TailnetState, node: String?, lan: Bool?, connect: Bool, log: ExitDiagnostics? = nil) -> String? {
+    static func validationFailure(_ state: TailscaleState, node: String?, lan: Bool?, connect: Bool, log: ExitDiagnostics? = nil) -> String? {
         if let error = state.error { return "Local daemon read failed: \(error)" }
         if let lan, state.allowLAN != lan { return "LAN preference did not match the request." }
         if let node {
@@ -179,7 +179,7 @@ enum ExitChange {
     static func worker(token: String) -> Int32 {
         // launchctl submit creates a KeepAlive job. Retire only our own job on
         // completion (including an exhausted recovery), rather than respawning forever.
-        let label = "local.tailnet.rollback." + token
+        let label = "local.tailscaled-gui.rollback." + token
         defer {
             if ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == label {
                 _ = Shell.run("/bin/launchctl", ["remove", label], timeout: 3)

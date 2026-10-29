@@ -91,9 +91,9 @@ enum SwordIcon: String {
         }
         image.isTemplate = true
         switch self {
-        case .solid: image.accessibilityDescription = "Tailnet connected"
-        case .empty: image.accessibilityDescription = "Tailnet disconnected"
-        case .exitNode: image.accessibilityDescription = "Tailnet connected through an exit node"
+        case .solid: image.accessibilityDescription = "tailscaled-gui connected"
+        case .empty: image.accessibilityDescription = "tailscaled-gui disconnected"
+        case .exitNode: image.accessibilityDescription = "tailscaled-gui connected through an exit node"
         }
         return image
     }

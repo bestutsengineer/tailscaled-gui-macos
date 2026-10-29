@@ -48,7 +48,7 @@ The script:
 4. Runs `sudo tailscaled install-system-daemon` (one password prompt).
 5. Pins Homebrew's `tailscale`, so `brew upgrade` doesn't move the CLI ahead of the daemon.
 
-Run it at the keyboard: the daemon restarts. Tailnet finds the marker in `/usr/local/bin/tailscaled` and turns its exit-node controls on.
+Run it at the keyboard: the daemon restarts. tailscaled-gui finds the marker in `/usr/local/bin/tailscaled` and turns its exit-node controls on.
 
 ## Trade-offs
 
@@ -66,7 +66,7 @@ sudo "$(brew --prefix)/bin/tailscaled" install-system-daemon
 brew unpin tailscale
 ```
 
-That puts back the stock Homebrew daemon. Tailnet then turns its exit-node controls off again.
+That puts back the stock Homebrew daemon. tailscaled-gui then turns its exit-node controls off again.
 
 ## Live validation
 

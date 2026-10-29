@@ -11,7 +11,7 @@ struct ExitNode: Equatable {
 }
 
 /// One reading of tailscaled: `tailscale status --json` plus `tailscale debug prefs`.
-struct TailnetState: Equatable {
+struct TailscaleState: Equatable {
     var daemonInstalled = false
     var backendState = "unknown"        // Running, Stopped, NeedsLogin, Starting, NoState
     var selfName: String?
@@ -63,8 +63,8 @@ enum Tailscale {
         return found
     }
 
-    static func read() -> TailnetState {
-        var state = TailnetState()
+    static func read() -> TailscaleState {
+        var state = TailscaleState()
         state.daemonInstalled = FileManager.default.fileExists(atPath: daemonPlist)
         state.exitFix = daemonHasExitFix()
         guard FileManager.default.isExecutableFile(atPath: cli) else {

@@ -3,9 +3,9 @@ import Foundation
 /// The same reads and changes the menu makes, for scripts and for testing without clicking.
 enum CLI {
     static let usage = """
-        Tailnet: menu bar control for the open-source tailscaled daemon.
+        tailscaled-gui: menu bar control for the open-source tailscaled daemon.
 
-        Usage: Tailnet [command]
+        Usage: tailscaled-gui [command]
           (no command)            run the menu bar app
           --status                connection, exit node and LAN access
           --menu                  print the menu as text
@@ -16,7 +16,7 @@ enum CLI {
           --connect               enable without an exit node
           --connect-last-exit     enable and apply the last used exit node
           --disconnect
-          --login-item on|off     start Tailnet at login (LaunchAgent)
+          --login-item on|off     start tailscaled-gui at login (LaunchAgent)
         """
 
     static func run(_ args: [String]) -> Int32 {

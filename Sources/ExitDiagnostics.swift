@@ -6,7 +6,7 @@ final class ExitDiagnostics {
     static var directory: URL { ExitChange.directory.deletingLastPathComponent().appendingPathComponent("diagnostics") }
     #else
     static let directory = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent("Library/Logs/Tailnet", isDirectory: true)
+        .appendingPathComponent("Library/Logs/tailscaled-gui", isDirectory: true)
     #endif
     let file = directory.appendingPathComponent(UUID().uuidString + ".json")
     private let started = Date()
@@ -48,7 +48,7 @@ final class ExitDiagnostics {
         } catch { /* Diagnostic failure must not disable recovery. */ }
     }
 
-    func state(_ event: String, _ s: TailnetState) {
+    func state(_ event: String, _ s: TailscaleState) {
         record(event, ["running": s.running, "usingExitNode": s.usingExitNode,
                        "exitNodeIP": s.activeExitNode?.ip ?? s.exitNodeIP,
                        "exitNodeOnline": s.activeExitNode?.online ?? false,

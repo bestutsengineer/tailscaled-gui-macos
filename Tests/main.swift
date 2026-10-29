@@ -9,7 +9,7 @@ struct ShellResult {
     var ok: Bool { status == 0 }
 }
 struct ExitNode { var ip: String; var online = true }
-struct TailnetState {
+struct TailscaleState {
     var error: String?
     var exitFix = true
     var running = true
@@ -20,8 +20,8 @@ struct TailnetState {
 }
 enum Tailscale {
     static let cli = "/test/tailscale"
-    static var state = TailnetState()
-    static func read() -> TailnetState { state }
+    static var state = TailscaleState()
+    static func read() -> TailscaleState { state }
 }
 struct Call { var path: String; var args: [String] }
 enum Shell {
@@ -43,17 +43,17 @@ func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     else { print("FAIL \(message)"); failures += 1 }
 }
 let fm = FileManager.default
-let environmentDirectory = ProcessInfo.processInfo.environment["TAILNET_TEST_DIRECTORY"]
+let environmentDirectory = ProcessInfo.processInfo.environment["TAILSCALED_GUI_TEST_DIRECTORY"]
 precondition(environmentDirectory != nil && ExitChange.directory.path == environmentDirectory!, "Tests require an isolated injected directory")
-precondition(ExitChange.directory.path.contains("tailnet-tests."), "Refuse to remove anything outside a test directory")
+precondition(ExitChange.directory.path.contains("tailscaled-gui-tests."), "Refuse to remove anything outside a test directory")
 func reset() {
     try? fm.removeItem(at: ExitChange.directory)
     Shell.calls = []
     Shell.handler = { _ in bad("Unstubbed call") }
-    Tailscale.state = TailnetState()
+    Tailscale.state = TailscaleState()
 }
-func selected(_ ip: String = "100.100.100.1") -> TailnetState {
-    var state = TailnetState()
+func selected(_ ip: String = "100.100.100.1") -> TailscaleState {
+    var state = TailscaleState()
     state.usingExitNode = true
     state.activeExitNode = ExitNode(ip: ip)
     state.exitNodeIP = ip
@@ -114,7 +114,7 @@ mockRoutes("utun7", "utun7", peer: "en0")
 expect(!ExitChange.matches(selected(), node: nil, lan: nil, connect: false), "peer route must itself use a tunnel")
 Shell.handler = { _ in bad("route lookup failed") }
 expect(!ExitChange.matches(selected(), node: nil, lan: nil, connect: false), "failed route lookup is rejected")
-expect(ExitChange.matches(TailnetState(), node: "", lan: false, connect: false), "cleared node does not require tunnel routes")
+expect(ExitChange.matches(TailscaleState(), node: "", lan: false, connect: false), "cleared node does not require tunnel routes")
 expect(!ExitChange.matches(selected(), node: "", lan: nil, connect: false), "still-selected node cannot report clear success")
 
 print("== Change preflight")
@@ -185,7 +185,7 @@ func performMocks(failChange: Bool = false, breakConnectivity: Bool = false, bre
             if !changed {
                 changed = true
                 if failChange { return bad("mock change failed") }
-                if emergency { Tailscale.state = TailnetState() }
+                if emergency { Tailscale.state = TailscaleState() }
                 else { Tailscale.state = selected() }
                 if breakCommit {
                     try! fm.createDirectory(at: ExitChange.directory.appendingPathComponent("committed"), withIntermediateDirectories: false)

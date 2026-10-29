@@ -18,7 +18,7 @@ enum Shell {
             return ShellResult(status: 0, stdout: json(["ExitNodeID": selectedID, "ExitNodeIP": "", "ExitNodeAllowLANAccess": false]), stderr: "")
         }
         if args == ["status", "--json"] {
-            return ShellResult(status: 0, stdout: json(["BackendState": backend,
+            return ShellResult(status: 0, stdout: json(["BackendState": backend, "CurrentTailnet": ["Name": "example.invalid"],
                 "Peer": Dictionary(uniqueKeysWithValues: peers.enumerated().map { ("peer\($0.offset)", $0.element) })]), stderr: "")
         }
         if args == ["down"] { backend = "Stopped"; return ShellResult(status: 0, stdout: "", stderr: "") }
@@ -42,14 +42,14 @@ func peer(id: String = "stable-example-exit", ip: String = "100.100.100.1", onli
     ["ID": id, "HostName": "example-exit", "DNSName": "exit.example.invalid.", "TailscaleIPs": [ip], "OS": "linux", "Online": online, "ExitNodeOption": true]
 }
 let fm = FileManager.default
-precondition(ExitNodeHistory.file.path.contains("tailnet-tests."))
+precondition(ExitNodeHistory.file.path.contains("tailscaled-gui-tests."))
 var checks = 0, failures = 0
 func expect(_ value: @autoclosure () -> Bool, _ message: String) {
     checks += 1
     if value() { print("PASS \(message)") } else { print("FAIL \(message)"); failures += 1 }
 }
 func reset(keepHistory: Bool = false) {
-    if !keepHistory { try? fm.removeItem(at: ExitNodeHistory.file) }
+    if !keepHistory { try? fm.removeItem(at: ExitNodeHistory.file); try? fm.removeItem(at: ExitNodeHistory.legacyFile) }
     backend = "Stopped"; selectedID = ""; peers = [peer()]; shellCalls = []
     ExitChange.requests = []; ExitChange.succeed = true
 }
@@ -74,6 +74,14 @@ clicks.receive(clickCount: 2, at: 4, interval: 0.5); clicks.cancel()
 expect(clicks.resolve(at: 5) == nil, "right click or a pending action can cancel a gesture")
 
 print("== Connection behavior and persistent history")
+reset()
+expect(Tailscale.read().tailnet == "example.invalid", "status still reads the Tailscale CurrentTailnet field after renaming")
+try! fm.createDirectory(at: ExitNodeHistory.legacyFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+let legacy = ExitNodeHistory.Saved(id: "legacy-id", ip: "100.100.100.5", name: "legacy")
+try! JSONEncoder().encode(legacy).write(to: ExitNodeHistory.legacyFile)
+expect((try? ExitNodeHistory.load()) == legacy, "last-used exit node is read from the old app's saved file")
+try! ExitNodeHistory.save(savedNode())
+expect((try? ExitNodeHistory.load())?.id == "stable-example-exit", "new history takes precedence over the legacy file")
 reset(); selectedID = "stable-example-exit"
 expect(Tailscale.connect().ok, "normal enable succeeds with a saved daemon exit node")
 expect(ExitChange.requests.last?.node == "" && ExitChange.requests.last?.connect == true, "normal enable explicitly requests no exit node")

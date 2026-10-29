@@ -4,13 +4,13 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private var timer: Timer?
-    private var state = TailnetState()
+    private var state = TailscaleState()
     private var currentIcon = ""
     private var busy = false
     private var refreshing = false
     private var clickTimer: Timer?
     private var clicks = StatusClickSequence()
-    private let work = DispatchQueue(label: "tailnet.work")
+    private let work = DispatchQueue(label: "tailscaled-gui.work")
     private var remoteGuide: RemoteAccessGuideWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -20,6 +20,11 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+        work.async {
+            do { try LoginItem.migrateLegacy() }
+            catch { DispatchQueue.main.async { self.showAlert("Couldn't update the login item", error.localizedDescription) } }
+        }
 
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refresh),
                                                           name: NSWorkspace.didWakeNotification, object: nil)
@@ -46,7 +51,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateIcon() {
         let icon = MenuModel.icon(state)
-        statusItem.button?.toolTip = "Tailnet: " + MenuModel.headline(state)
+        statusItem.button?.toolTip = "tailscaled-gui: " + MenuModel.headline(state)
             + "\nDouble-click: enable without exit node / disable"
             + "\nTriple-click: enable with last used exit node"
             + "\nSingle-click or right-click: menu"

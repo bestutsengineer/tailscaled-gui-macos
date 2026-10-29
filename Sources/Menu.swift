@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the menu should show, built from a TailnetState alone so `Tailnet --menu` can print it.
+/// What the menu should show, built from a TailscaleState alone so `tailscaled-gui --menu` can print it.
 struct MenuRow {
     enum Kind {
         case headline, section, info, warning, action, separator
@@ -37,7 +37,7 @@ struct MenuRow {
 }
 
 enum MenuModel {
-    static func headline(_ s: TailnetState) -> String {
+    static func headline(_ s: TailscaleState) -> String {
         if let error = s.error, !s.running { return "Tailscale: \(error)" }
         switch s.backendState {
         case "Running":
@@ -53,12 +53,12 @@ enum MenuModel {
 
     /// Menu bar icon: solid sword while connected (with an outward arrow when an exit node carries traffic),
     /// empty sword while not; errors stay in the menu and tooltip.
-    static func icon(_ s: TailnetState) -> SwordIcon {
+    static func icon(_ s: TailscaleState) -> SwordIcon {
         if !s.running { return .empty }
         return s.usingExitNode ? .exitNode : .solid
     }
 
-    static func rows(_ s: TailnetState, loginItem: Bool) -> [MenuRow] {
+    static func rows(_ s: TailscaleState, loginItem: Bool) -> [MenuRow] {
         var rows: [MenuRow] = []
         let headSymbol = s.running ? (s.exitNodeUnreachable ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                                    : (s.needsLogin ? "person.crop.circle.badge.exclamationmark" : "pause.circle")
@@ -103,11 +103,11 @@ enum MenuModel {
         rows.append(MenuRow(title: "Refresh", kind: .action, symbol: "arrow.clockwise", command: .refresh, key: "r"))
         rows.append(MenuRow(title: "Start at Login", kind: .toggle(loginItem), command: .toggleLoginItem))
         rows.append(.separator)
-        rows.append(MenuRow(title: "Quit Tailnet", kind: .action, command: .quit, key: "q"))
+        rows.append(MenuRow(title: "Quit tailscaled-gui", kind: .action, command: .quit, key: "q"))
         return rows
     }
 
-    static func exitNodeRows(_ s: TailnetState) -> [MenuRow] {
+    static func exitNodeRows(_ s: TailscaleState) -> [MenuRow] {
         let works = s.exitFix
         var rows: [MenuRow] = []
         if !works {

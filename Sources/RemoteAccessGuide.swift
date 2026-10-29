@@ -52,7 +52,7 @@ enum RemoteAccessChecks {
         if state.running && serviceRunning {
             connection = GuideCheck(label: "Connected · service running", level: .good, evidence: "The system service is running and Tailscale reports a connection now.")
         } else if state.error != nil {
-            connection = GuideCheck(label: "Connection not confirmed", level: .unknown, evidence: "Tailnet could not read the Tailscale state. Check the main menu and service.")
+            connection = GuideCheck(label: "Connection not confirmed", level: .unknown, evidence: "tailscaled-gui could not read the Tailscale state. Check the main menu and service.")
         } else {
             connection = GuideCheck(label: state.running ? "Check system service" : "Not connected", level: .attention, evidence: "The connection or system service is not currently confirmed.")
         }
@@ -212,7 +212,7 @@ struct RemoteAccessGuideView: View {
         switch model.selected {
         case .connection:
             Text("Keep this Mac connected to your tailnet so your other device can reach it.")
-            step(1, "Connect Tailnet using the menu bar icon. Leave it connected before restarting.")
+            step(1, "Connect tailscaled-gui using the menu bar icon. Leave it connected before restarting.")
             step(2, "Make sure your other device is signed in to the same tailnet and allowed to reach this Mac.")
             DisclosureGroup("Technical details", isExpanded: $technical) {
                 Text("The check reads Tailscale status and launchctl's system service state. A running service today does not prove it will start after a restart, retain its connection preference, or be reachable through your network and tailnet policy.")
@@ -253,7 +253,7 @@ struct RemoteAccessGuideView: View {
             }
         case .test:
             Text("The only reliable way to know is to try the full journey while you can still reach the Mac in person.")
-            step(1, "Leave Tailnet connected and restart this Mac. Do not sign in or unlock it locally.")
+            step(1, "Leave tailscaled-gui connected and restart this Mac. Do not sign in or unlock it locally.")
             step(2, "From another device, connect to this Mac over Tailscale and try RustDesk with its unattended password.")
             step(3, "Confirm you can see and control the login screen, then repeat after your usual idle period.")
             Text("If it fails, use the steps on the left to review the connection, disk unlock, remote-control service and sleep settings.")
