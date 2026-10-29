@@ -71,10 +71,15 @@ func pending() -> ExitChange.Recovery {
     try! JSONDecoder().decode(ExitChange.Recovery.self,
         from: Data(contentsOf: ExitChange.directory.appendingPathComponent("recovery.json")))
 }
-func mockRoutes(_ first: String = "utun7", _ second: String = "utun7") {
+func mockRoutes(_ first: String = "utun7", _ second: String = "utun7", peer: String = "utun7") {
     Shell.handler = { call in
         guard call.path == "/sbin/route" else { return bad("Unexpected \(call.path)") }
-        let interface = call.args.last == "1.1.1.1" ? first : second
+        let interface: String
+        switch call.args.last {
+        case "1.1.1.1": interface = first
+        case "208.67.222.222": interface = second
+        default: interface = peer
+        }
         return ok("   route to: \(call.args.last!)\n  interface: \(interface)\n")
     }
 }
@@ -83,7 +88,7 @@ print("== Desired state and kernel routing")
 reset()
 mockRoutes()
 expect(ExitChange.matches(selected(), node: "100.100.100.1", lan: false, connect: true), "desired selected online node with both utun routes passes")
-expect(Shell.calls.filter { $0.path == "/sbin/route" }.map { $0.args.last! } == ["1.1.1.1", "208.67.222.222"], "both IPv4 halves are probed")
+expect(Shell.calls.filter { $0.path == "/sbin/route" }.map { $0.args.last! } == ["100.100.100.1", "1.1.1.1", "208.67.222.222"], "peer tunnel and both IPv4 halves are probed")
 var state = selected()
 state.activeExitNode = ExitNode(ip: "100.100.100.2")
 expect(!ExitChange.matches(state, node: "100.100.100.1", lan: nil, connect: false), "wrong selected exit node cannot report success")
@@ -101,6 +106,12 @@ mockRoutes("utun7", "en0")
 expect(!ExitChange.matches(selected(), node: nil, lan: nil, connect: false), "upper-half Wi-Fi fallback is rejected")
 mockRoutes("en0", "utun7")
 expect(!ExitChange.matches(selected(), node: nil, lan: nil, connect: false), "lower-half Wi-Fi fallback is rejected")
+mockRoutes("utun7", "utun8")
+expect(!ExitChange.matches(selected(), node: nil, lan: nil, connect: false), "upper-half route through a second VPN is rejected")
+mockRoutes("utun8", "utun8")
+expect(!ExitChange.matches(selected(), node: nil, lan: nil, connect: false), "both internet routes through another VPN cannot falsely pass")
+mockRoutes("utun7", "utun7", peer: "en0")
+expect(!ExitChange.matches(selected(), node: nil, lan: nil, connect: false), "peer route must itself use a tunnel")
 Shell.handler = { _ in bad("route lookup failed") }
 expect(!ExitChange.matches(selected(), node: nil, lan: nil, connect: false), "failed route lookup is rejected")
 expect(ExitChange.matches(TailnetState(), node: "", lan: false, connect: false), "cleared node does not require tunnel routes")
