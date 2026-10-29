@@ -58,8 +58,33 @@ enum MakeIcon {
         return rep.representation(using: .png, properties: [:])!
     }
 
+    /// README-sized renderings of the same menu-bar silhouettes, on a light tile
+    /// so the black template artwork stays visible in both GitHub themes.
+    static func readmeIcon(_ icon: SwordIcon) -> Data {
+        let pixels = 72
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
+                                   samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor(calibratedWhite: 0.96, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: pixels, height: pixels), xRadius: 12, yRadius: 12).fill()
+        icon.draw(in: NSRect(x: 12, y: 12, width: 48, height: 48), color: .black)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:])!
+    }
+
     static func main() throws {
         precondition(SwordIcon.hasSymmetricBase, "Sword outline and fill must mirror across the blade axis")
+        if CommandLine.arguments.dropFirst().first == "--readme-icons" {
+            let output = CommandLine.arguments.dropFirst(2).first ?? "Resources/readme"
+            try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
+            try render(128).write(to: URL(fileURLWithPath: "\(output)/app.png"))
+            for (name, icon) in [("connected", SwordIcon.solid), ("disconnected", .empty), ("exit-node", .exitNode)] {
+                try readmeIcon(icon).write(to: URL(fileURLWithPath: "\(output)/\(name).png"))
+            }
+            return
+        }
         if CommandLine.arguments.dropFirst().first == "--preview" {
             let path = CommandLine.arguments.dropFirst(2).first ?? "Resources/SwordPreview.png"
             try preview().write(to: URL(fileURLWithPath: path))

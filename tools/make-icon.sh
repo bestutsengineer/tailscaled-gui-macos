@@ -8,4 +8,5 @@ swiftc -O -parse-as-library -module-cache-path "$TMP/module-cache" -framework Ap
 "$TMP/make-icon" "$TMP/AppIcon.iconset"
 iconutil -c icns "$TMP/AppIcon.iconset" -o Resources/AppIcon.icns
 "$TMP/make-icon" --preview Resources/SwordPreview.png
+"$TMP/make-icon" --readme-icons Resources/readme
 echo "Wrote Resources/AppIcon.icns"
