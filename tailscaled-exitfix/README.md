@@ -12,7 +12,7 @@
 
 ## The fix
 
-The v3 patch adds `router_darwin_split.go` and updates route application and cleanup in `Set` and `Close`. On macOS, a default route, or a route equal to one of the Mac's own on-link prefixes, is installed as its two halves:
+The v4 patch adds `router_darwin_split.go` and updates route application and cleanup in `Set` and `Close`. On macOS, a default route, or a route equal to one of the Mac's own on-link prefixes, is installed as its two halves:
 
 - `0/0` becomes `0.0.0.0/1` and `128.0.0.0/1`; `::/0` becomes `::/1` and `8000::/1`.
 - `192.168.1.0/24` becomes two `/25` routes.
@@ -23,7 +23,7 @@ Other VPNs do the same. The halves win by longest-prefix match, add without conf
 - **LAN access on:** Tailscale doesn't send LAN prefixes at all, and Wi-Fi's `/24` beats the tunnel's `/1`, so the LAN stays local.
 - **tailscaled's own traffic:** its sockets are bound to Wi-Fi (`net/netns`, `IP_BOUND_IF`), so its WireGuard, DERP and control traffic doesn't loop into the tunnel.
 
-## v3 reliability changes
+## Transport protection and reliability
 
 - Install the physical, interface-scoped transport route before adding tunnel routes. Abort the route update if that protection fails.
 - Treat an existing direct, interface-scoped route as OS-owned and leave it alone.
@@ -31,7 +31,9 @@ Other VPNs do the same. The halves win by longest-prefix match, add without conf
 - Retain failed scoped-route deletions for retry and clean up owned scoped routes when the router closes.
 - Unit tests cover deterministic prefix splitting, route ownership, error propagation, cleanup retries and validation of existing scoped routes.
 
-The installed daemon must contain `tailscaled-darwin-exitfix-v3`. Older v1 builds can break same-LAN exit nodes when local network access is disabled. The GUI should not treat the generic marker prefix as sufficient.
+V4 also reads the kernel routing table for physical IPv4/IPv6 default gateways and installs interface-scoped copies before any tunnel halves. Without a scoped default, sockets bound to Wi-Fi can have no route to a remote WireGuard endpoint after `/1` routes appear, even though the unscoped physical default still exists. V3 protected same-LAN transport only. Gateway and interface are validated before reusing an existing scoped default; OS-owned routes are never claimed for deletion. Tests cover default-route classification, IPv6 gateway zones, and scoped gateway/interface validation.
+
+The installed daemon must contain `tailscaled-darwin-exitfix-v4`. Older v1 builds can break same-LAN exit nodes when local network access is disabled. The GUI should not treat the generic marker prefix as sufficient.
 
 ## Build and install
 
@@ -42,7 +44,7 @@ The installed daemon must contain `tailscaled-darwin-exitfix-v3`. Older v1 build
 The script:
 1. Clones the tag and commit from the Homebrew formula and checks the commit.
 2. Applies the patch and runs its tests.
-3. Builds with Homebrew's version ldflags and checks for the marker string `tailscaled-darwin-exitfix-v3`.
+3. Builds with Homebrew's version ldflags and checks for the marker string `tailscaled-darwin-exitfix-v4`.
 4. Runs `sudo tailscaled install-system-daemon` (one password prompt).
 5. Pins Homebrew's `tailscale`, so `brew upgrade` doesn't move the CLI ahead of the daemon.
 
@@ -52,7 +54,7 @@ Run it at the keyboard: the daemon restarts. Tailnet finds the marker in `/usr/l
 
 - You run a root daemon that you built: upstream source plus the patch, which you can read in `exitfix.patch`.
 - Updates aren't automatic. To update: `brew unpin tailscale && brew upgrade tailscale`, then `./build.sh` again. If the patch stops applying, upstream has changed that file, so check whether they fixed it.
-- DNS isn't managed by `tailscaled` on macOS. With an exit node, public resolvers (such as `1.1.1.1`) are reached through the exit node. A resolver on your LAN is reached directly while LAN access is on.
+- DNS is configured by the daemon. With an exit node selected, DNS may use that peer's DNS proxy; diagnostics must distinguish failed DNS from failed HTTPS or peer transport.
 
 ## Undo
 

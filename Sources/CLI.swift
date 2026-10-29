@@ -9,10 +9,13 @@ enum CLI {
           (no command)            run the menu bar app
           --status                connection, exit node and LAN access
           --menu                  print the menu as text
+          --diagnose              save local network diagnostics (does not change settings)
           --exit-node NAME|IP     use that exit node (needs tailscaled-exitfix)
           --exit-node none        stop using an exit node
           --lan on|off            allow local network access while using an exit node
-          --connect | --disconnect
+          --connect               enable without an exit node
+          --connect-last-exit     enable and apply the last used exit node
+          --disconnect
           --login-item on|off     start Tailnet at login (LaunchAgent)
         """
 
@@ -21,6 +24,7 @@ enum CLI {
         case "--rollback-worker":
             guard args.count == 2 else { return 2 }
             return ExitChange.worker(token: args[1])
+        case "--diagnose": return report(ExitDiagnostics.collect())
         case "--status":
             let s = Tailscale.read()
             print(MenuModel.headline(s))
@@ -31,7 +35,7 @@ enum CLI {
             print("LAN access: \(s.allowLAN ? "allowed" : "blocked") while using an exit node")
             print("offered by: \(s.exitNodes.map { "\($0.name)\($0.online ? "" : " (offline)")" }.joined(separator: ", "))")
             print("operator:   \(s.operatorUser ?? "none (changes need sudo)")")
-            print("exit fix:   \(s.exitFix ? "v3 installed" : "repair required (stock or older patch)")")
+            print("exit fix:   \(s.exitFix ? "v4 installed" : "repair required (stock or older patch)")")
             if let error = s.error { print("error:      \(error)") }
             return s.error == nil ? 0 : 1
         case "--menu":
@@ -41,7 +45,7 @@ enum CLI {
             guard args.count >= 2 else { return fail(usage) }
             if args[1] == "none" { return report(Tailscale.setExitNode(nil)) }
             guard Tailscale.daemonHasExitFix() else {
-                return fail("Stock tailscaled on macOS can't use exit nodes; install tailscaled-exitfix v3 (see README).")
+                return fail("Stock tailscaled on macOS can't use exit nodes; install tailscaled-exitfix v4 (see README).")
             }
             let wanted = args[1].lowercased()
             let nodes = Tailscale.read().exitNodes
@@ -58,6 +62,7 @@ enum CLI {
             if args[1] == "off" { LoginItem.disable(); return 0 }
             do { try LoginItem.enable(); return 0 } catch { return fail(error.localizedDescription) }
         case "--connect": return report(Tailscale.connect())
+        case "--connect-last-exit": return report(Tailscale.connect(useLastExit: true))
         case "--disconnect": return report(Tailscale.disconnect())
         default:
             print(usage)

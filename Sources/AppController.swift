@@ -8,13 +8,18 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var currentIcon = ""
     private var busy = false
     private var refreshing = false
+    private var clickTimer: Timer?
+    private var clicks = StatusClickSequence()
     private let work = DispatchQueue(label: "tailnet.work")
+    private var remoteGuide: RemoteAccessGuideWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         menu.delegate = self
         menu.autoenablesItems = false
-        statusItem.menu = menu
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(statusClicked(_:))
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
 
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refresh),
                                                           name: NSWorkspace.didWakeNotification, object: nil)
@@ -42,12 +47,48 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func updateIcon() {
         let icon = MenuModel.icon(state)
         statusItem.button?.toolTip = "Tailnet: " + MenuModel.headline(state)
+            + "\nDouble-click: enable without exit node / disable"
+            + "\nTriple-click: enable with last used exit node"
+            + "\nSingle-click or right-click: menu"
         guard icon.rawValue != currentIcon else { return }
         currentIcon = icon.rawValue
         statusItem.button?.image = icon.menuBarImage
     }
 
     // MARK: Menu
+
+    @objc private func statusClicked(_ sender: NSStatusBarButton) {
+        guard !busy, let event = NSApp.currentEvent else { return }
+        clickTimer?.invalidate()
+        // Control-click is a secondary click for both mice and trackpads.
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            clicks.cancel()
+            showMenu()
+            return
+        }
+        let interval = NSEvent.doubleClickInterval
+        clicks.receive(clickCount: event.clickCount, at: ProcessInfo.processInfo.systemUptime, interval: interval)
+        let timer = Timer(timeInterval: interval + 0.02, repeats: false) { [weak self] _ in
+            guard let self, !self.busy,
+                  let action = self.clicks.resolve(at: ProcessInfo.processInfo.systemUptime) else { return }
+            switch action {
+            case .menu: self.showMenu()
+            case .toggle: self.run("Couldn't change connection") { Tailscale.toggleConnection() }
+            case .connectLastExit: self.run("Couldn't connect using the last exit node") { Tailscale.connect(useLastExit: true) }
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        clickTimer = timer
+    }
+
+    private func showMenu() {
+        // AppKit positions status-item menus below the menu bar and handles screen edges.
+        // The temporary menu assignment preserves our single/double/triple click handler.
+        guard let button = statusItem.button else { return }
+        statusItem.menu = menu
+        defer { statusItem.menu = nil }
+        button.performClick(nil)
+    }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         // Render immediately; CLI reads stay on the worker queue.
@@ -115,6 +156,19 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Tailscale.login(onURL: { NSWorkspace.shared.open($0) },
                             done: { _ in self.busy = false; self.refresh() })
         case .adminConsole: NSWorkspace.shared.open(Tailscale.adminConsole)
+        case .remoteAccessGuide:
+            if remoteGuide == nil { remoteGuide = RemoteAccessGuideWindow() }
+            remoteGuide?.show()
+        case .diagnose:
+            busy = true
+            work.async {
+                let result = ExitDiagnostics.collect()
+                DispatchQueue.main.async {
+                    self.busy = false
+                    self.showAlert("Network Diagnostics", result.stdout)
+                    if result.ok { NSWorkspace.shared.open(ExitDiagnostics.directory) }
+                }
+            }
         case .refresh: refresh()
         case .toggleLoginItem: toggleLoginItem()
         case .quit: NSApp.terminate(nil)
@@ -123,6 +177,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Runs one tailscale change in the background; shows the CLI's own error if it fails.
     private func run(_ failureTitle: String, _ change: @escaping () -> ShellResult) {
+        clickTimer?.invalidate()
+        clicks.cancel()
         busy = true
         work.async {
             let result = change()
@@ -156,6 +212,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.informativeText = message
         alert.runModal()
     }
+
 }
 
 /// NSMenuItem.representedObject needs a class; MenuRow.Command is an enum with payloads.

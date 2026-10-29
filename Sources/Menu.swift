@@ -10,7 +10,8 @@ struct MenuRow {
 
     enum Command: Equatable {
         case copyIP, connect, disconnect, login, exitNode(ExitNode?), toggleLAN
-        case adminConsole, refresh, toggleLoginItem, quit
+        case adminConsole, diagnose, refresh, toggleLoginItem, quit
+        case remoteAccessGuide
     }
 
     var title: String
@@ -83,9 +84,10 @@ enum MenuModel {
 
         rows.append(.separator)
         rows.append(MenuRow(title: "This Mac", kind: .section))
-        rows.append(MenuRow(title: s.daemonInstalled ? "tailscaled daemon: runs before login\(s.exitFix ? " · exit-node fix" : "")"
+        rows.append(MenuRow(title: s.daemonInstalled ? "tailscaled daemon: system service\(s.exitFix ? " · exit-node fix" : "")"
                                                      : "tailscaled daemon: not installed",
-                            kind: s.daemonInstalled ? .info : .warning, symbol: "lock.open.laptopcomputer"))
+                            kind: s.daemonInstalled ? .info : .warning, symbol: "lock.open.laptopcomputer",
+                            tooltip: "The system service starts after the startup disk is unlocked. FileVault requires an unlock after restart."))
         if s.operatorUser == nil && s.error == nil {
             rows.append(MenuRow(title: "Changes need sudo: no operator set (see README)", kind: .warning))
         }
@@ -94,7 +96,10 @@ enum MenuModel {
         }
 
         rows.append(.separator)
+        rows.append(MenuRow(title: "Unattended Remote Access Guide…", kind: .action,
+                            symbol: "desktopcomputer", command: .remoteAccessGuide))
         rows.append(MenuRow(title: "Open Admin Console", kind: .action, symbol: "safari", command: .adminConsole))
+        rows.append(MenuRow(title: "Save Network Diagnostics…", kind: .action, symbol: "stethoscope", command: .diagnose))
         rows.append(MenuRow(title: "Refresh", kind: .action, symbol: "arrow.clockwise", command: .refresh, key: "r"))
         rows.append(MenuRow(title: "Start at Login", kind: .toggle(loginItem), command: .toggleLoginItem))
         rows.append(.separator)
@@ -106,7 +111,7 @@ enum MenuModel {
         let works = s.exitFix
         var rows: [MenuRow] = []
         if !works {
-            rows.append(MenuRow(title: "Exit-node repair required (exitfix v3)", kind: .warning,
+            rows.append(MenuRow(title: "Exit-node repair required (exitfix v4)", kind: .warning,
                                 symbol: "exclamationmark.triangle",
                                 tooltip: "Stock tailscaled on macOS doesn't route exit-node traffic, and clearing an exit node drops the network for a minute."))
             rows.append(.separator)

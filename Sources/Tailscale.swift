@@ -47,7 +47,7 @@ enum Tailscale {
     /// `0.0.0.0/0 -iface utunX`, which macOS refuses while Wi-Fi's default route exists, and clearing
     /// the exit node then deletes Wi-Fi's default route. tailscaled-exitfix/exitfix.patch fixes that;
     /// a daemon built with it carries this marker, and only then does the menu change exit nodes.
-    static let exitFixMarker = "tailscaled-darwin-exitfix-v3"   // v1 loses transport; v2 has incomplete error handling
+    static let exitFixMarker = "tailscaled-darwin-exitfix-v4"   // v3 lacks scoped defaults for remote-peer transport
     private static let markerLock = NSLock()
     private static var markerCache: (mtime: Date, found: Bool)?
 
@@ -119,22 +119,49 @@ enum Tailscale {
     // MARK: Changes (need root or the operator user; see README)
 
     static func setExitNode(_ node: ExitNode?) -> ShellResult {
-        ExitChange.perform(node: node?.ip ?? "")
+        if node == nil { try? ExitNodeHistory.rememberSelection(read()) }
+        let result = ExitChange.perform(node: node?.ip ?? "")
+        if result.ok, let node {
+            do { try ExitNodeHistory.save(node) }
+            catch { return ExitChange.failure("Exit node was applied, but its history could not be saved: \(error.localizedDescription)") }
+        }
+        return result
     }
 
     static func setAllowLAN(_ allow: Bool) -> ShellResult {
         ExitChange.perform(allowLAN: allow)
     }
 
-    /// `tailscale up` with no flags only flips WantRunning back on; prefs set with `tailscale set` stay.
-    static func connect() -> ShellResult {
+    /// A normal enable always clears the daemon's saved selection. Only an explicit
+    /// restore gesture/command reapplies history, using the same independent watchdog.
+    static func connect(useLastExit: Bool = false) -> ShellResult {
         let state = read()
         guard state.error == nil else { return ExitChange.failure(state.error ?? "Cannot read preferences") }
-        if state.usingExitNode { return ExitChange.perform(connect: true) }
-        return Shell.run(cli, ["up"], timeout: 20)
+        do {
+            // Adopt selections made before this version or through another client.
+            try ExitNodeHistory.rememberSelection(state)
+            if useLastExit, let saved = try ExitNodeHistory.load() {
+                guard let node = saved.resolve(in: state), node.online else {
+                    return ExitChange.failure("Last used exit node \(saved.name) is offline or unavailable. Settings were left unchanged.")
+                }
+                let result = ExitChange.perform(node: node.ip, connect: true)
+                if result.ok { try ExitNodeHistory.save(node) }
+                return result
+            }
+        } catch { return ExitChange.failure("Couldn't read or save exit-node history: \(error.localizedDescription)") }
+        return ExitChange.perform(node: "", connect: true)
     }
 
-    static func disconnect() -> ShellResult { Shell.run(cli, ["down"], timeout: 15) }
+    static func disconnect() -> ShellResult {
+        try? ExitNodeHistory.rememberSelection(read())
+        return Shell.run(cli, ["down"], timeout: 15)
+    }
+
+    static func toggleConnection() -> ShellResult {
+        let state = read()
+        guard state.error == nil else { return ExitChange.failure(state.error ?? "Cannot read connection state") }
+        return state.running ? disconnect() : connect()
+    }
 
     /// Starts `tailscale login` and hands the auth URL to `onURL` as soon as the CLI prints it.
     /// The process keeps running until the browser sign-in finishes (or 10 minutes pass).

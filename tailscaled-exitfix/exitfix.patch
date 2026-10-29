@@ -1,9 +1,9 @@
 diff --git a/wgengine/router/osrouter/router_darwin_split.go b/wgengine/router/osrouter/router_darwin_split.go
 new file mode 100644
-index 0000000..01bf723
+index 0000000..3cde1fa
 --- /dev/null
 +++ b/wgengine/router/osrouter/router_darwin_split.go
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,291 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -20,16 +20,19 @@ index 0000000..01bf723
 +	"strings"
 +
 +	"go4.org/netipx"
++	"golang.org/x/net/route"
++	"golang.org/x/sys/unix"
 +	"tailscale.com/types/logger"
 +)
 +
 +// darwinExitFixMarker lets tools tell this build apart from upstream tailscaled.
-+const darwinExitFixMarker = "tailscaled-darwin-exitfix-v3"
++const darwinExitFixMarker = "tailscaled-darwin-exitfix-v4"
 +
 +// scopedRoute is an on-link route pinned to its interface (`route add -ifscope`).
 +type scopedRoute struct {
-+	prefix netip.Prefix
-+	ifname string
++	prefix  netip.Prefix
++	ifname  string
++	gateway string // empty for a direct on-link route
 +}
 +
 +// splitConflictingRoutes rewrites the routes macOS can't add with `route add -iface utunX`
@@ -50,7 +53,8 @@ index 0000000..01bf723
 +	if runtime.GOOS != "darwin" {
 +		return routes, nil
 +	}
-+	return splitRoutesForOnLink(logf, routes, onLinkPrefixes(tunname))
++	out, scoped = splitRoutesForOnLink(logf, routes, onLinkPrefixes(tunname))
++	return out, scoped
 +}
 +
 +func splitRoutesForOnLink(logf logger.Logf, routes []netip.Prefix, onLink map[netip.Prefix]string) (out []netip.Prefix, scoped []scopedRoute) {
@@ -66,13 +70,85 @@ index 0000000..01bf723
 +			logf("%s: route %v installed as %v and %v", darwinExitFixMarker, p, lo, hi)
 +			out = append(out, lo, hi)
 +			if isOnLink {
-+				scoped = append(scoped, scopedRoute{p, ifname})
++				scoped = append(scoped, scopedRoute{prefix: p, ifname: ifname})
 +			}
 +		default:
 +			out = append(out, p)
 +		}
 +	}
 +	return out, scoped
++}
++
++// Interface-bound sockets cannot fall back to an unscoped default after the
++// tunnel's /1 routes are installed. Preserve each physical default in its own
++// scope before that happens. Read the RIB, not a lookup for 0.0.0.0, which would
++// return the tunnel's /1 on subsequent updates. No scope applies to ordinary
++// application sockets, which must continue to use the exit node.
++func physicalDefaultRoutes(routes []netip.Prefix, tunname string) ([]scopedRoute, error) {
++	if runtime.GOOS != "darwin" {
++		return nil, nil
++	}
++	families := map[bool]bool{}
++	for _, p := range routes {
++		if p.Bits() == 0 {
++			families[p.Addr().Is4()] = true
++		}
++	}
++	if len(families) == 0 {
++		return nil, nil
++	}
++	rib, err := route.FetchRIB(unix.AF_UNSPEC, route.RIBTypeRoute, 0)
++	if err != nil {
++		return nil, fmt.Errorf("read physical defaults: %w", err)
++	}
++	msgs, err := route.ParseRIB(route.RIBTypeRoute, rib)
++	if err != nil {
++		return nil, fmt.Errorf("parse physical defaults: %w", err)
++	}
++	seen := map[scopedRoute]bool{}
++	var out []scopedRoute
++	for _, msg := range msgs {
++		rm, ok := msg.(*route.RouteMessage)
++		if !ok || rm.Flags&(unix.RTF_UP|unix.RTF_GATEWAY) != unix.RTF_UP|unix.RTF_GATEWAY ||
++			rm.Flags&(unix.RTF_REJECT|unix.RTF_BLACKHOLE) != 0 || len(rm.Addrs) <= unix.RTAX_NETMASK {
++			continue
++		}
++		ifc, err := net.InterfaceByIndex(rm.Index)
++		if err != nil || ifc.Name == tunname || strings.HasPrefix(ifc.Name, "utun") || ifc.Flags&net.FlagLoopback != 0 {
++			continue
++		}
++		p, ok := physicalDefault(rm.Addrs[unix.RTAX_DST], rm.Addrs[unix.RTAX_NETMASK], rm.Addrs[unix.RTAX_GATEWAY], ifc.Name)
++		if !ok || !families[p.prefix.Addr().Is4()] || seen[p] {
++			continue
++		}
++		seen[p] = true
++		out = append(out, p)
++	}
++	return out, nil
++}
++
++func physicalDefault(dst, mask, gw route.Addr, ifname string) (scopedRoute, bool) {
++	switch d := dst.(type) {
++	case *route.Inet4Addr:
++		m, mok := mask.(*route.Inet4Addr)
++		g, gok := gw.(*route.Inet4Addr)
++		if d.IP != [4]byte{} || (mask != nil && (!mok || m.IP != [4]byte{})) || !gok || g.IP == [4]byte{} {
++			return scopedRoute{}, false
++		}
++		return scopedRoute{netip.MustParsePrefix("0.0.0.0/0"), ifname, netip.AddrFrom4(g.IP).String()}, true
++	case *route.Inet6Addr:
++		m, mok := mask.(*route.Inet6Addr)
++		g, gok := gw.(*route.Inet6Addr)
++		if d.IP != [16]byte{} || (mask != nil && (!mok || m.IP != [16]byte{})) || !gok || g.IP == [16]byte{} {
++			return scopedRoute{}, false
++		}
++		ip := netip.AddrFrom16(g.IP)
++		if ip.IsLinkLocalUnicast() {
++			ip = ip.WithZone(ifname)
++		}
++		return scopedRoute{netip.MustParsePrefix("::/0"), ifname, ip.String()}, true
++	}
++	return scopedRoute{}, false
 +}
 +
 +// halves splits p into the two prefixes one bit longer than it.
@@ -173,6 +249,9 @@ index 0000000..01bf723
 +func (r *userspaceBSDRouter) scopedRouteCmd(op string, s scopedRoute) error {
 +	args := []string{"route", "-q", "-n", op, "-" + inet(s.prefix), s.prefix.String(),
 +		"-interface", s.ifname, "-ifscope", s.ifname}
++	if s.gateway != "" {
++		args = []string{"route", "-q", "-n", op, "-" + inet(s.prefix), s.prefix.String(), s.gateway, "-ifscope", s.ifname}
++	}
 +	out, err := cmd(args...).CombinedOutput()
 +	if err != nil {
 +		r.logf("%s: %v: %v\n%s", darwinExitFixMarker, args, err, out)
@@ -191,7 +270,7 @@ index 0000000..01bf723
 +}
 +
 +func scopedRouteOutputMatches(out string, s scopedRoute) bool {
-+	var ifname, flags, destination string
++	var ifname, flags, destination, gateway string
 +	for _, line := range strings.Split(out, "\n") {
 +		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
 +		if !ok {
@@ -204,17 +283,24 @@ index 0000000..01bf723
 +			flags = strings.TrimSpace(v)
 +		case "destination":
 +			destination = strings.TrimSpace(v)
++		case "gateway":
++			gateway = strings.TrimSpace(v)
 +		}
 +	}
-+	return ifname == s.ifname && destination == s.prefix.Addr().String() &&
-+		strings.Contains(flags, "IFSCOPE") && !strings.Contains(flags, "GATEWAY")
++	if ifname != s.ifname || !strings.Contains(flags, "IFSCOPE") {
++		return false
++	}
++	if s.gateway != "" {
++		return (destination == "default" || destination == s.prefix.Addr().String()) && gateway == s.gateway && strings.Contains(flags, "GATEWAY")
++	}
++	return destination == s.prefix.Addr().String() && !strings.Contains(flags, "GATEWAY")
 +}
 diff --git a/wgengine/router/osrouter/router_darwin_split_test.go b/wgengine/router/osrouter/router_darwin_split_test.go
 new file mode 100644
-index 0000000..d9e4bc2
+index 0000000..9711636
 --- /dev/null
 +++ b/wgengine/router/osrouter/router_darwin_split_test.go
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,178 @@
 +// Copyright (c) Tailscale Inc & contributors
 +// SPDX-License-Identifier: BSD-3-Clause
 +
@@ -224,6 +310,7 @@ index 0000000..d9e4bc2
 +
 +import (
 +	"errors"
++	"golang.org/x/net/route"
 +	"net/netip"
 +	"testing"
 +)
@@ -271,7 +358,7 @@ index 0000000..d9e4bc2
 +			continue
 +		}
 +		got, scoped := splitConflictingRoutes(t.Logf, []netip.Prefix{p}, "utun-none")
-+		if len(got) != 2 || len(scoped) != 1 || scoped[0] != (scopedRoute{p, ifname}) {
++		if len(got) != 2 || len(scoped) != 1 || scoped[0] != (scopedRoute{prefix: p, ifname: ifname}) {
 +			t.Errorf("on-link %v on %s: routes %v, scoped %v", p, ifname, got, scoped)
 +		}
 +		return
@@ -280,7 +367,7 @@ index 0000000..d9e4bc2
 +}
 +
 +func TestScopedTransportRouteOrderingAndOwnership(t *testing.T) {
-+	s := scopedRoute{netip.MustParsePrefix("192.168.1.0/24"), "en0"}
++	s := scopedRoute{prefix: netip.MustParsePrefix("192.168.1.0/24"), ifname: "en0"}
 +	owned := map[scopedRoute]bool{}
 +	fail := errors.New("route command failed")
 +	ops := []string{}
@@ -321,7 +408,7 @@ index 0000000..d9e4bc2
 +}
 +
 +func TestScopedRouteOutputMatches(t *testing.T) {
-+	s := scopedRoute{netip.MustParsePrefix("192.168.1.0/24"), "en0"}
++	s := scopedRoute{prefix: netip.MustParsePrefix("192.168.1.0/24"), ifname: "en0"}
 +	for _, tt := range []struct {
 +		output string
 +		want   bool
@@ -337,8 +424,63 @@ index 0000000..d9e4bc2
 +		}
 +	}
 +}
++
++func TestPhysicalDefault(t *testing.T) {
++	zero := &route.Inet4Addr{}
++	gw := &route.Inet4Addr{IP: [4]byte{172, 21, 142, 1}}
++	got, ok := physicalDefault(zero, zero, gw, "en0")
++	if !ok || got.gateway != "172.21.142.1" || got.prefix.String() != "0.0.0.0/0" {
++		t.Fatalf("got %v, %v", got, ok)
++	}
++	if _, ok := physicalDefault(zero, &route.Inet4Addr{IP: [4]byte{128, 0, 0, 0}}, gw, "en0"); ok {
++		t.Fatal("accepted tunnel /1")
++	}
++	if _, ok := physicalDefault(gw, zero, gw, "en0"); ok {
++		t.Fatal("accepted non-default destination")
++	}
++	if _, ok := physicalDefault(zero, zero, zero, "en0"); ok {
++		t.Fatal("accepted missing gateway")
++	}
++	if _, ok := physicalDefault(zero, zero, &route.LinkAddr{Index: 12}, "en0"); ok {
++		t.Fatal("accepted on-link default")
++	}
++	v6 := &route.Inet6Addr{IP: netip.MustParseAddr("fe80::1").As16()}
++	got, ok = physicalDefault(&route.Inet6Addr{}, &route.Inet6Addr{}, v6, "en0")
++	if !ok || got.gateway != "fe80::1%en0" {
++		t.Fatalf("IPv6 zone lost: %v %v", got, ok)
++	}
++}
++func TestScopedDefaultOutputMatches(t *testing.T) {
++	s := scopedRoute{netip.MustParsePrefix("0.0.0.0/0"), "en0", "172.21.142.1"}
++	good := "destination: default\ngateway: 172.21.142.1\ninterface: en0\nflags: <UP,GATEWAY,DONE,STATIC,IFSCOPE>"
++	if !scopedRouteOutputMatches(good, s) {
++		t.Fatal("rejected matching default")
++	}
++	for _, bad := range []string{
++		"destination: default\ngateway: 172.21.142.2\ninterface: en0\nflags: <UP,GATEWAY,IFSCOPE>",
++		"destination: default\ngateway: 172.21.142.1\ninterface: en0\nflags: <UP,GATEWAY>",
++		"destination: default\ngateway: 172.21.142.1\ninterface: utun4\nflags: <UP,GATEWAY,IFSCOPE>",
++		"destination: 128.0.0.0\ngateway: 172.21.142.1\ninterface: en0\nflags: <UP,GATEWAY,IFSCOPE>",
++	} {
++		if scopedRouteOutputMatches(bad, s) {
++			t.Fatalf("accepted %s", bad)
++		}
++	}
++}
++func TestPhysicalDefaultRoutesLiveReadOnly(t *testing.T) {
++	got, err := physicalDefaultRoutes([]netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}, "utun-none")
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, s := range got {
++		if s.gateway == "" || s.prefix.Bits() != 0 {
++			t.Fatalf("invalid scoped default %v", s)
++		}
++	}
++	t.Logf("physical defaults: %v", got)
++}
 diff --git a/wgengine/router/osrouter/router_userspace_bsd.go b/wgengine/router/osrouter/router_userspace_bsd.go
-index 88eda4c..df4961f 100644
+index 88eda4c..f6a5860 100644
 --- a/wgengine/router/osrouter/router_userspace_bsd.go
 +++ b/wgengine/router/osrouter/router_userspace_bsd.go
 @@ -29,6 +29,7 @@ type userspaceBSDRouter struct {
@@ -349,11 +491,16 @@ index 88eda4c..df4961f 100644
  }
  
  func newUserspaceBSDRouter(logf logger.Logf, tundev tun.Device, netMon *netmon.Monitor, health *health.Tracker) (*userspaceBSDRouter, error) {
-@@ -144,8 +145,13 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+@@ -144,8 +145,18 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
  		}
  	}
  
 +	routes, scoped := splitConflictingRoutes(r.logf, cfg.Routes, r.tunname)
++	defaults, err := physicalDefaultRoutes(cfg.Routes, r.tunname)
++	if err != nil {
++		return err
++	}
++	scoped = append(defaults, scoped...)
 +	// Establish physical transport before tunnel halves can capture the peer.
 +	if err := r.addScopedRoutes(scoped); err != nil {
 +		return err
@@ -364,7 +511,7 @@ index 88eda4c..df4961f 100644
  		if runtime.GOOS != "darwin" && route == tsaddr.TailscaleULARange() {
  			// Because we added the interface address as a /48 above,
  			// the kernel already created the Tailscale ULA route
-@@ -154,6 +160,12 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+@@ -154,6 +165,12 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
  		}
  		newRoutes[route] = true
  	}
@@ -377,7 +524,7 @@ index 88eda4c..df4961f 100644
  	// Delete any preexisting routes.
  	for route := range r.routes {
  		if resetRoutes || !newRoutes[route] {
-@@ -171,12 +183,14 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+@@ -171,12 +188,14 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
  			if err != nil {
  				r.logf("route del failed: %v: %v\n%s", routedel, err, out)
  				setErr(err)
@@ -393,7 +540,7 @@ index 88eda4c..df4961f 100644
  			net := netipx.PrefixIPNet(route)
  			nip := net.IP.Mask(net.Mask)
  			nstr := fmt.Sprintf("%v/%d", nip, route.Bits())
-@@ -185,8 +199,10 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+@@ -185,8 +204,10 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
  				"-iface", r.tunname}
  			out, err := cmd(routeadd...).CombinedOutput()
  			if err != nil {
@@ -405,7 +552,7 @@ index 88eda4c..df4961f 100644
  			}
  		}
  	}
-@@ -195,11 +211,12 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
+@@ -195,11 +216,12 @@ func (r *userspaceBSDRouter) Set(cfg *router.Config) (reterr error) {
  	if reterr == nil {
  		r.local = append([]netip.Prefix{}, cfg.LocalAddrs...)
  	}

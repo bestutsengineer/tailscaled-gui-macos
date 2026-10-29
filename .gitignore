@@ -54,3 +54,36 @@ CLAUDE.md
 .idea/
 xcuserdata/
 *.xcuserstate
+
+# Prepared public export; kept separate from this repository and its history
+/public-release/
+
+# Credentials and local service configurations
+.npmrc
+.pypirc
+.netrc
+*.credentials
+*.secret
+*.cer
+*.crt
+*.der
+*.jks
+*.keystore
+kubeconfig
+# Captures, dumps, local reports, and scratch exports
+*.har
+*.core
+*.dmp
+*.trace
+*.profraw
+*.profdata
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.dmg
+*.pkg
+*.ipa
+*.xcarchive/
+**/node_modules/

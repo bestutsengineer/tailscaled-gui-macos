@@ -119,11 +119,11 @@ expect(!ExitChange.matches(selected(), node: "", lan: nil, connect: false), "sti
 
 print("== Change preflight")
 reset(); Tailscale.state.exitFix = false
-expect(!ExitChange.perform(node: "100.100.100.1").ok, "new exit-node selection requires v3 capability")
+expect(!ExitChange.perform(node: "100.100.100.1").ok, "new exit-node selection requires v4 capability")
 expect(Shell.calls.isEmpty, "unsupported selection does not run a command")
-expect(!ExitChange.perform(allowLAN: true).ok, "LAN routing change requires v3 capability")
+expect(!ExitChange.perform(allowLAN: true).ok, "LAN routing change requires v4 capability")
 Tailscale.state = selected(); Tailscale.state.exitFix = false; Tailscale.state.running = false
-expect(!ExitChange.perform(connect: true).ok, "reconnect with saved exit node requires v3 capability")
+expect(!ExitChange.perform(connect: true).ok, "reconnect with saved exit node requires v4 capability")
 expect(Shell.calls.isEmpty, "unsupported reconnect does not run a command")
 reset(); Tailscale.state.running = false
 expect(!ExitChange.perform(node: "100.100.100.1").ok, "selection while stopped is rejected")
@@ -212,7 +212,61 @@ expect(!ExitChange.perform(node: "100.100.100.1").ok, "commit marker failure doe
 expect(fm.fileExists(atPath: ExitChange.directory.appendingPathComponent("recovery.json").path), "commit marker failure leaves watchdog recovery armed")
 reset(); Tailscale.state.usingExitNode = true; Tailscale.state.exitFix = false
 performMocks(emergency: true)
-expect(ExitChange.perform(node: "").ok, "emergency clear of unresolved old exit node works without internet or v3")
+expect(ExitChange.perform(node: "").ok, "emergency clear of unresolved old exit node works without internet or v4")
+reset()
+print("== Enable with an explicit selection")
+func connectionMocks(failPrepare: Bool = false, failUp: Bool = false, leaveStopped: Bool = false) {
+    Shell.handler = { call in
+        if call.path == "/usr/bin/curl" { return ok() }
+        if call.path == "/bin/launchctl" {
+            try! Data(pending().token.utf8).write(to: ExitChange.directory.appendingPathComponent("ready"))
+            return ok()
+        }
+        if call.path == "/sbin/route" { return ok("interface: utun7\n") }
+        if call.path == Tailscale.cli {
+            if call.args.first == "set", call.args.count == 2 {
+                if failPrepare { return bad("prepare failed") }
+                let ip = String(call.args[1].dropFirst("--exit-node=".count))
+                Tailscale.state.usingExitNode = !ip.isEmpty
+                Tailscale.state.activeExitNode = ip.isEmpty ? nil : ExitNode(ip: ip)
+                return ok()
+            }
+            if call.args == ["up"] {
+                if failUp { return bad("up failed") }
+                if !leaveStopped { Tailscale.state.running = true }
+                return ok()
+            }
+            return ok() // restore
+        }
+        return bad("Unexpected command")
+    }
+}
+Tailscale.state = selected(); Tailscale.state.running = false
+connectionMocks()
+expect(ExitChange.perform(node: "", connect: true).ok, "normal enable clears a stale exit selection under the watchdog")
+expect(Shell.calls.filter { $0.path == Tailscale.cli }.map(\.args) == [["set", "--exit-node="], ["up"]], "selection is cleared before starting the daemon")
+reset(); Tailscale.state.running = false; connectionMocks()
+expect(ExitChange.perform(node: "100.100.100.1", connect: true).ok, "explicit enable can select an exit node while originally stopped")
+expect(Shell.calls.filter { $0.path == Tailscale.cli }.map(\.args) == [["set", "--exit-node=100.100.100.1"], ["up"]], "remembered selection is prepared before starting")
+reset(); Tailscale.state.running = false; connectionMocks(failPrepare: true)
+expect(!ExitChange.perform(node: "", connect: true).ok, "failed selection preparation rejects enable")
+expect(!Shell.calls.contains { $0.path == Tailscale.cli && $0.args == ["up"] }, "a failed clear never starts with the stale exit node")
+reset(); Tailscale.state.running = false; connectionMocks(failUp: true)
+expect(!ExitChange.perform(node: "", connect: true).ok, "failed enable reports rollback")
+expect(Shell.calls.contains { $0.path == Tailscale.cli && $0.args == ["down"] }, "failed enable restores the original stopped state")
+reset(); Tailscale.state.running = false; connectionMocks(leaveStopped: true)
+expect(!ExitChange.perform(node: "", connect: true).ok, "a cleared node alone cannot falsely validate a stopped backend as enabled")
+reset()
+print("== Diagnostics")
+let log = ExitDiagnostics()
+log.record("test", ["reason": "route missing"])
+let report = try! JSONSerialization.jsonObject(with: Data(contentsOf: log.file)) as! [String: Any]
+expect(report["schema"] as? Int == 1 && (report["events"] as? [[String: Any]])?.last?["reason"] as? String == "route missing", "diagnostics persist structured failure evidence")
+let logPermissions = try! fm.attributesOfItem(atPath: log.file.path)[.posixPermissions] as! NSNumber
+let directoryPermissions = try! fm.attributesOfItem(atPath: ExitDiagnostics.directory.path)[.posixPermissions] as! NSNumber
+expect(logPermissions.intValue == 0o600 && directoryPermissions.intValue == 0o700, "diagnostic files and directory are private")
+mockRoutes("utun7", "en0")
+expect(ExitChange.validationFailure(selected(), node: nil, lan: nil, connect: false)?.contains("208.67.222.222") == true, "validation identifies the failing internet route")
 reset()
 print("\n\(checks) checks; \(failures) failures. No live commands or network changes executed.")
 exit(failures == 0 ? 0 : 1)
