@@ -8,9 +8,8 @@ A small macOS menu bar app for the open-source Tailscale daemon. Connect, choose
 
 > Unofficial project. Not affiliated with or endorsed by Tailscale Inc.
 
-<img src="Resources/readme/menu-screenshot.png" alt="Privacy-redacted, AI-edited preview of the tailscaled-gui menu and exit-node submenu" width="610">
+<img src="Resources/readme/menu-screenshot.png" alt="tailscaled-gui menu and exit-node submenu" width="610">
 
-*Menu preview, AI-edited to obscure a device name; some details may differ from the actual screenshot.*
 
 ## Unattended remote access
 
