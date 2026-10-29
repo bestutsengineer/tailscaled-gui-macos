@@ -11,9 +11,15 @@ Control Tailscale and set up your MacBook for unattended remote access, even wit
 <img src="Resources/readme/menu-screenshot.png" alt="tailscaled-gui menu and exit-node submenu" width="610">
 
 
+## Why tailscaled-gui?
+
+The official Tailscale macOS apps don't run before a user logs in. The App Store app is sandboxed, while the standalone app uses a sandboxed system extension; their pre-login limitation is shared, not the same sandbox arrangement. The open-source `tailscaled` variant can run as a system service before login once the startup disk is unlocked, but it has no official GUI. tailscaled-gui provides a menu for that variant after you sign in. See [Tailscale's macOS comparison](https://tailscale.com/docs/concepts/macos-variants).
+
+Tailscale describes standalone daemon operation on macOS as [unsupported](https://tailscale.com/docs/how-to/run-unattended) and recommends the open-source variant only for experienced administrators.
+
 ## Unattended remote access
 
-Use **Unattended Remote Access Guide…** in the menu to check your setup and walk through the steps. It covers connecting with Tailscale, controlling the Mac with RustDesk, keeping it awake with optional Caffeine, and testing after a restart. Optional sections explain security and technical details.
+Use **Unattended Remote Access Guide…** in the menu to check your setup and walk through the steps. It covers connecting with Tailscale, controlling the Mac with RustDesk, keeping it awake with optional [Caffeine](https://github.com/bestutsengineer/caffeine), and testing after a restart. Optional sections explain security and technical details.
 
 After a normal restart, **FileVault may require someone at the Mac to unlock the disk** before remote services can start. Turning FileVault off can remove that step, but makes files easier to access if the Mac is lost or stolen. The guide explains the choice; it does not change FileVault or install other apps for you.
 
